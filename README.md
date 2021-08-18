@@ -13,7 +13,7 @@ To decrease the price even more, please 3D print the parts in the "hardware" fol
 Here is everything you will need to purchase:
 
 1.  Electronics & hardware kit
-    a. <a href="https://valarsystems.com/products/automatic-window-opener?variant=39590892240955" target="_blank"><b>Excluding</b> 3D printed parts</a>
+    a. [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955)
     b. <a href="https://valarsystems.com/products/automatic-window-opener?variant=39590892208187"><b>Including</b> 3D printed parts</a>
 
 2. <a href="https://amzn.to/2XAAUiN" target="_blank">Stepper motor</a>
