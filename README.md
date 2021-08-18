@@ -24,13 +24,13 @@ Here is everything you will need to purchase:
     * T8 Trapazoidal
     * 400mm length
 
-Power Supply: Be sure to note how long your cord needs to be. Please purchase #5 below for a cleaner build.
+**Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a cleaner build.
 
 4. <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply Option 1</a> 
-    1. 12V  
-    2. 3A+
-    3. 2.5mm x 5.5mm barrel connector size
-    4. Center positive pin
+    * 12V  
+    * 3A+
+    * 2.5mm x 5.5mm barrel connector size
+    * Center positive pin
 
 5. Use these parts for a cleaner build. You can customize the length of the power wire which is also much thinner and easier to hide.
     1. <a href="https://amzn.to/3k75ist" target="_blank">Power Supply Option 2</a>
