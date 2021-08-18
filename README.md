@@ -78,6 +78,6 @@ Follow the instructions outlined in the ![firmware](/firmware) folder.
 
 ## Node-RED workflow
 
-Use Node-RED in Home Assistant to automate everything. Watch this video to see how we do it.
+Use Node-RED in Home Assistant to automate everything. Click the image below to watch a YouTube video on how it works.
 
 [![Youtube Link](/media/node-red-flow.jpg)](https://youtu.be/ou7uRED_ff0)
