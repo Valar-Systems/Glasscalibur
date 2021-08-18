@@ -17,22 +17,23 @@ Here is everything you will need to purchase:
     * [**Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187)
 
 2. <a href="https://amzn.to/2XAAUiN" target="_blank">Stepper motor</a>
-    1. NEMA 17
-    2. 60mm body (If your window needs less than 20 lbs to move, you can use a 48mm body)
+    * NEMA 17
+    * 60mm body (If your window needs less than 20 lbs to move, you can use a 48mm body)
 
-3. <a href="https://amzn.to/3xVVnuL" target="_blank">Lead Screw - 400mm</a>
-    1. T8 Trapazoidal
-    2. 400mm length
+3. <a href="https://amzn.to/3xVVnuL" target="_blank">Lead screw</a>
+    * T8 Trapazoidal
+    * 400mm length
 
-4. Be sure to note how long your cord needs to be. Please purchase #5 below for a cleaner build.
-    <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply</a>
+Power Supply: Be sure to note how long your cord needs to be. Please purchase #5 below for a cleaner build.
+
+4. <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply Option 1</a> 
     1. 12V  
     2. 3A+
-    3. 2.5mm x 5.5mm barrel
-    4. Center positive
+    3. 2.5mm x 5.5mm barrel connector size
+    4. Center positive pin
 
 5. Use these parts for a cleaner build. You can customize the length of the power wire which is also much thinner and easier to hide.
-    1. <a href="https://amzn.to/3k75ist" target="_blank">Power Supply</a>
+    1. <a href="https://amzn.to/3k75ist" target="_blank">Power Supply Option 2</a>
     2. <a href="https://amzn.to/2VV82S1" target="_blank">Barrel Adapter</a>
     3. <a href="https://amzn.to/3CTFUz3" target="_blank">22/2 Wire</a>
 
