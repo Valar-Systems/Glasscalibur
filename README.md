@@ -5,6 +5,13 @@ The Model-H is a smart window opener that uses HTTP request to open and close yo
 [comment]: # (GIF of opening and closing)
 ![window opener GIF](/media/window-gif.gif)
 
+## Will it work on your window?
+
+Before you get too excited and buy/build this, please be sure it will work on your window
+
+
+
+
 ## How to built it
 
 This build includes a large number of different screws, nuts, and hardware that are difficult to find. In order to bring the cost of building this to the lowest possible level, we have created a kit, as well as a list of additional required hardware from Amazon. By purhasing the large and heavy products from Amazon, we are able to decrease the total cost of the entire build to an affordable level.
@@ -38,3 +45,4 @@ Here is everything you will need to purchase. Feel free to find cheaper alternat
     2. <a href="https://amzn.to/2VV82S1" target="_blank">Barrel Adapter</a>
     3. <a href="https://amzn.to/3CTFUz3" target="_blank">22/2 Wire</a>
 
+## How to install it
