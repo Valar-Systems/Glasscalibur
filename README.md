@@ -1,15 +1,30 @@
 # Model-H: Automated Horizontal Window Opener
 
-The Model-H is a smart window opener that uses HTTP request to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
+The Model-H is a smart window opener that uses HTTP requests to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
 
 [comment]: # (GIF of opening and closing)
 ![window opener GIF](/media/window-gif.gif)
 
+## Safety features
+
+Safety is the primary concern with this device. 
+
+In case of emergencies, the entire device can be instantly removed for your window. (see GIF above)
+
+In case an object or limb gets in the way during window operations, the device will automatically stop and save its location. 
+
+In the event that you leave the window locked, the device will automateically detect a locked window and stop the motor.
+
+
 ## Will it work on your window?
 
-Before you get too excited and buy/build this, please be sure it will work on your window
+Before you get too excited and buy/build this, please be sure it will work on your window. The height of your window sill is the primary part to consider.
 
+![window opener GIF](/media/window-sill.jpg)
 
+The maximum distance from the top of the window frame to the sill is 2 inches (Red text in the image above. Any more than 2 inches and you will need to raise the window opener. One solution is to use a piece of wood such as a 1x4 or 2x4 in order to elevate the entire device.
+
+In order to properly attach the window mount (white piece in the above photo), your window needs 14mm of the lower sash of the window to be exposed.
 
 
 ## How to built it
@@ -45,4 +60,13 @@ Here is everything you will need to purchase. Feel free to find cheaper alternat
     2. <a href="https://amzn.to/2VV82S1" target="_blank">Barrel Adapter</a>
     3. <a href="https://amzn.to/3CTFUz3" target="_blank">22/2 Wire</a>
 
+
 ## How to install it
+
+There are 2 mounts that are attached with adhesive. If necessary, you can also use a screw into the sill, but that has been required. 
+
+First attach the window mount.
+
+Next, attach the sill mount.
+
+Wait 24 hours for the adhesives to set and you can now use the window opener.
