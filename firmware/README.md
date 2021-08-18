@@ -2,10 +2,9 @@
 
 ## Step 1 - Connect Power & Motor
 1. Connect a 12V 3A+ power cord to the power plug (2.1mm X 5.5mm Plug)
-2. Connect a bipolar stepper motor to the 4 motor pins A1, A2, B1, B2.
-3. If you need to move something heavy, over 50 lbs., consider using a geared stepper motor.
+2. Flashing the firmware requires 12V power to the device
 
-## Step 2 - Connect to board Access Point
+## Step 2 - Connect to the Model-H
 1. Using your smart phone or laptop (or any device with Wi-Fi), look for the Wi-Fi network name VALAR-AP.
 2. Connect to VALAR-AP
 
@@ -16,7 +15,7 @@ Note: This is an access point which means you will connect directly to the devic
 
 You are now connected to the device and can begin to control the motor directly.
 
-## Step 3 - Add board to your network
+## Step 3 - Add Model-H to your network
 It's best to add this device to your network so you do not need to connect to it directly.
 1. To do so, go to http://192.168.4.1/wifi
 2. Enter in the name and password of your Wi-Fi router. Your device will now connect to your router.
@@ -26,7 +25,7 @@ It's best to add this device to your network so you do not need to connect to it
 6. You should now be connected to the device.
 7. To reset the name and password that is stored in the device, press and hold the small Wi-Fi reset button that is to the left of the power plug for over 3 seconds. You should now see the VALAR-AP network again.
 
-## Step 4 - Control your motor
+## Step 4 - Control your Model-H
 1. Disconnect the motor from the window to test the motor. 
 2. Under the "Position" section, enter a value of 50 and click "Set Position". The motor should begin moving to the 50 percent position.
 3. There is an auto-calibration sequence that will auotmatically set the:
@@ -55,13 +54,3 @@ You may want to set up some automations to control your device. To trigger the m
 http://YOUR-IP-ADDRESS/position?move_percent=0
 Replace YOUR-IP-ADDRESSS with the devices actual IP address such as 192.168.0.56
 Replace the "0" with a value of 0-100 to set the position.
-
-## Step 6 (Optional) - Download and open the Arduino code
-If you would like to modify the code, visit the Github Repo:
-https://github.com/daniel-frenkel/Valar-Systems
-Follow the instructions in the VAL-1000 folder.
-Step 7 – Additional Support
-Please feel free to email me at daniel@valarsystems.com with additional questions. 
-Thanks! 
--Daniel Frenkel
-
