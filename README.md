@@ -17,18 +17,18 @@ In the event that you leave the window locked, the device will automateically de
 
 ## Will it work on your window?
 
-Before you get too excited and buy/build this, please be sure it will work on your window. The height of your window sill is the primary part to consider.
+Before you get too excited and buy/build this, please be sure it will work on your window. The height of your window sill is the primary factor to consider.
 
 ![window opener GIF](/media/window-sill.jpg)
 
-The maximum distance from the top of the window frame to the sill is 2 inches (Red text in the image above. Any more than 2 inches and you will need to raise the window opener. One solution is to use a piece of wood such as a 1x4 or 2x4 in order to elevate the entire device.
+The maximum distance from the top of the window frame to the sill is 2 inches (Red text in the image above). Any more than 2 inches and you will need to raise the window opener. One solution is to use a piece of wood such as a 1x4 or 2x4 in order to elevate the entire device.
 
 In order to properly attach the window mount (white piece in the above photo), your window needs 14mm of the lower sash of the window to be exposed.
 
 
 ## How to built it
 
-This build includes a large number of different screws, nuts, and hardware that are difficult to find. In order to bring the cost of building this to the lowest possible level, we have created a kit, as well as a list of additional required hardware from Amazon. By purhasing the large and heavy products from Amazon, we are able to decrease the total cost of the entire build to an affordable level.
+This build includes a large number of different screws, nuts, and hardware that are difficult to find. In order to bring the cost of building this to the lowest possible level, we have created a kit, as well as a list of additional required hardware from Amazon. By purchasing the large and heavy products from Amazon, we are able to decrease the total cost of the entire build to an affordable level.
 
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
 
@@ -69,3 +69,16 @@ First attach the window mount.
 Next, attach the sill mount.
 
 Wait 24 hours for the adhesives to set and you can now use the window opener.
+
+## Sending commands
+
+Commands are sent via HTTP requests
+
+Follow the instructions outlined in the ![firmware](/firmware) folder.
+
+## Node-RED workflow
+
+Use Node-RED in Home Assistant to automate everything. Watch this video to see how we do it.
+
+![Youtube](https://youtu.be/ou7uRED_ff0)
+
