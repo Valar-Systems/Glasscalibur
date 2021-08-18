@@ -3,6 +3,7 @@
 The Model-H is a smart window opener that uses HTTP request to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
 
 [comment]: # (GIF of opening and closing)
+![window opener GIF](/media/window-gif.gif)
 
 ## How to built it
 
@@ -10,7 +11,7 @@ This build includes a large number of different screws, nuts, and hardware that 
 
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
 
-Here is everything you will need to purchase:
+Here is everything you will need to purchase. Feel free to find cheaper alternatives on Amazon or elsewhere.
 
 1.  Electronics & hardware kit
     * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955)
