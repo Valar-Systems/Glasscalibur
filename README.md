@@ -13,26 +13,26 @@ To decrease the price even more, please 3D print the parts in the "hardware" fol
 Here is everything you will need to purchase:
 
 1.  Electronics & hardware kit
-    a. [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955)
-    b. <a href="https://valarsystems.com/products/automatic-window-opener?variant=39590892208187"><b>Including</b> 3D printed parts</a>
+    * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955)
+    * [**Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187)
 
 2. <a href="https://amzn.to/2XAAUiN" target="_blank">Stepper motor</a>
-    a. NEMA 17
-    b. 60mm body (If your window needs less than 20 lbs to move, you can use a 48mm body)
+    1. NEMA 17
+    2. 60mm body (If your window needs less than 20 lbs to move, you can use a 48mm body)
 
 3. <a href="https://amzn.to/3xVVnuL" target="_blank">Lead Screw - 400mm</a>
-    a. T8 Trapazoidal
-    b. 400mm length
+    1. T8 Trapazoidal
+    2. 400mm length
 
-4a. Be sure to note how long your cord needs to be. Please purchase 4b below for a cleaner build.
+4. Be sure to note how long your cord needs to be. Please purchase #5 below for a cleaner build.
     <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply</a>
-    a. 12V  
-    b. 3A+
-    c. 2.5mm x 5.5mm barrel
-    d. Center positive
+    1. 12V  
+    2. 3A+
+    3. 2.5mm x 5.5mm barrel
+    4. Center positive
 
-4b. Use these parts for a cleaner build. You can customize the length of the wire which is also much thinner and easier to hide.
-    a. <a href="https://amzn.to/3k75ist" target="_blank">Power Supply</a>
-    b. <a href="https://amzn.to/2VV82S1" target="_blank">Barrel Adapter</a>
-    c. <a href="https://amzn.to/3CTFUz3" target="_blank">22/2 Wire</a>
+5. Use these parts for a cleaner build. You can customize the length of the power wire which is also much thinner and easier to hide.
+    1. <a href="https://amzn.to/3k75ist" target="_blank">Power Supply</a>
+    2. <a href="https://amzn.to/2VV82S1" target="_blank">Barrel Adapter</a>
+    3. <a href="https://amzn.to/3CTFUz3" target="_blank">22/2 Wire</a>
 
