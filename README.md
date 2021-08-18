@@ -80,5 +80,4 @@ Follow the instructions outlined in the ![firmware](/firmware) folder.
 
 Use Node-RED in Home Assistant to automate everything. Watch this video to see how we do it.
 
-![Youtube](https://youtu.be/ou7uRED_ff0)
-
+[![Youtube Link](/media/node-red-flow.jpg)](https://youtu.be/ou7uRED_ff0)
