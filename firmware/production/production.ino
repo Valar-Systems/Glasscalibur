@@ -69,7 +69,7 @@ void MotorTask(void *pvParameters)  // Motor Task
     }
     else if(calibrate == 1)
     {
-      //TravelDistance();
+      TravelDistance();
       CalibrateCurrent();
       CalibrateStall();
       calibrate = 0;
