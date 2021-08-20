@@ -20,6 +20,8 @@ Safety is the primary concern with this device.
 
 In case of emergencies, the entire device can be instantly removed for your window. (see GIF above)
 
+![window opener main](/media/hand-gif.gif)
+
 In case an object or limb gets in the way during window operations, the device will automatically stop and save its location. 
 
 In the event that you leave the window locked, the device will automateically detect a locked window and stop the motor.
