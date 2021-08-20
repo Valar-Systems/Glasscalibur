@@ -98,13 +98,13 @@ Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewh
 
 ## How to 3D print it
 
-You window might **from** the left **to** the right, or it might open **from** the right **to** the left.
+Your window might open **from** the left **to** the right, or it might open **from** the right **to** the left.
 
 The only version available is the ability to open from right to left. The other version will be added at a later time.
 
 Go to the repo folder "hardware" -> "Plastics" -> "open-left" -> "platters"
 
-These PrusaSlicer platters are set up to print. Otherwise just open the STLs individually (not recommended). 
+These PrusaSlicer platters are set up to print. Otherwise just print the STLs individually (not recommended because print orientation is critical). 
 
 ### Print Settings:
 * Use PETG **only**
