@@ -40,11 +40,17 @@ In the event that you leave the window locked, the device will automateically de
 
 Before you get too excited and buy/build this, please be sure it will work on your window. The height of your window sill is the primary factor to consider.
 
+### Is your window sill the correct height?
+
 ![window opener GIF](/media/window-sill.jpg)
 
 The maximum distance from the top of the window frame to the sill is 2 inches (Red text in the image above). Any more than 2 inches and you will need to raise the window opener. One solution is to use a piece of wood such as a 1x4 or 2x4 in order to elevate the entire device.
 
 In order to properly attach the window mount (white piece in the above photo), your window needs 14mm of the lower sash of the window to be exposed.
+
+### Is your window wide enough?
+
+The deivce is just under 22" from end to end. This means your window needs to be at least 44" wide. Also add in 2 inches to be safe. So your window needs to be 46" wide from end to end.
 
 
 ## How to build it
@@ -57,7 +63,10 @@ To decrease the price even more, please 3D print the parts in the "hardware" fol
 
 **Short Story:**
 
-Total build cost: ~$130 USD
+Total parts cost: ~$130 USD
+Total print time: 24 hours
+Total filament costs: ~$10
+(You can also purchase the 3D prints for $40)
 
 Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewhere.
 
