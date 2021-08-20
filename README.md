@@ -4,6 +4,15 @@ The Model-H is a smart window opener that uses HTTP requests to open and close y
 
 ![window opener main](/media/window-gif.gif)
 
+## Use cases
+
+While you can use Alexa, Google or other voice control, home automation is where this device shines. 
+
+1. Use an indoor air qaulity sensor (like an Awair) to trigger the window to air out the room
+2. Check Purple Air sensors hourly and close your windows when bad outdoor air is detected
+2. Measure indoor and outdoor temperatures and cool your room when necessary
+3. Check weather APIs if it's raining to open/close your window
+4. Set a schedule to listen to the morning birds chirp
 
 ## How it works
 
