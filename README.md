@@ -8,7 +8,7 @@ The Model-H is a smart window opener that uses HTTP requests to open and close y
 
 While you can use Alexa, Google or other voice control, home automation is where this device shines. 
 
-1. Use an indoor air qaulity sensor (like an Awair) to trigger the window to air out the room
+1. Use an indoor air quality sensor (like an Awair) to trigger the window to air out the room
 2. Check Purple Air sensors hourly and close your windows when bad outdoor air is detected
 2. Measure indoor and outdoor temperatures and cool your room when necessary
 3. Check weather APIs if it's raining to open/close your window
@@ -33,7 +33,7 @@ In case of emergencies, the entire device can be instantly removed for your wind
 
 In case an object or limb gets in the way during window operations, the device will automatically stop and save its location. 
 
-In the event that you leave the window locked, the device will automateically detect a locked window and stop the motor.
+In the event that you leave the window locked, the device will automatically detect a locked window and stop the motor.
 
 
 ## Will it work on your window?
@@ -50,22 +50,18 @@ In order to properly attach the window mount (white piece in the above photo), y
 
 ### Is your window wide enough?
 
-The deivce is just under 22" from end to end. This means your window needs to be at least 44" wide. Also add in 2 inches to be safe. So your window needs to be 46" wide from end to end.
+The device is just under 22" from end to end. This means your window needs to be at least 44" wide. Also add in 2 inches to be safe. So your window needs to be 46" wide from end to end.
 
 ### Is your window too heavy?
 
-The motor has been tested to move up to 40 lbs. However, this is extrememly heavy and may cause problems. If your window is this heavy, lubricate it with dry silicone spray and check if that helps.
+The motor has been tested to move up to 40 lbs. However, this is extremely heavy and may cause problems. If your window is this heavy, lubricate it with dry silicone spray and check if that helps.
 
 
 ## How to build it
 
-**Long story:**
-
-This build includes a large number of different screws, nuts, and hardware that are difficult to find. In order to bring the cost of building this to the lowest possible level, we have created a kit, as well as a list of additional required hardware from Amazon. By purchasing the large and heavy products from Amazon, we are able to decrease the total cost of the entire build to an affordable level.
+This build includes many different screws, nuts, and hardware that are difficult to find. To bring the cost of building this to the lowest possible level, we have created a kit, as well as a list of additional required hardware from Amazon. By purchasing the large and heavy products from Amazon, we can decrease the total cost of the entire build to an affordable level.
 
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
-
-**Short Story:**
 
 * Total parts cost: ~$130 USD
 * Total print time: 24 hours
@@ -86,7 +82,7 @@ Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewh
     * 60mm body (If your window needs less than 20 lbs to move, you can use a 48mm body)
 
 3. <a href="https://amzn.to/3xVVnuL" target="_blank">Lead screw</a> ($6-10 USD)
-    * T8 Trapazoidal
+    * T8 Trapezoidal
     * 400mm length
 
 **Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a nicer build. ($9-23 USD)
@@ -107,7 +103,7 @@ Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewh
 
 Your window might open **from** the left **to** the right, or it might open **from** the right **to** the left.
 
-The only version available is the ability to open from right to left. The other version will be added at a later time.
+The only version available is the ability to open from right to left. The other version will be added later.
 
 Go to the repo folder "hardware" -> "Plastics" -> "open-left" -> "platters"
 
