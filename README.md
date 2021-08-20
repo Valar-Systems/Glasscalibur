@@ -46,21 +46,23 @@ To decrease the price even more, please 3D print the parts in the "hardware" fol
 
 **Short Story:**
 
-Here is everything you will need to purchase. Feel free to find cheaper alternatives on Amazon or elsewhere.
+Total build cost: ~$130 USD
+
+Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewhere.
 
 1.  Electronics & hardware kit
-    * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955)
-    * [**Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187)
+    * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) ($99 USD)
+    * [**Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187) ($139 USD)
 
-2. <a href="https://amzn.to/2XAAUiN" target="_blank">Stepper motor</a>
+2. <a href="https://amzn.to/2XAAUiN" target="_blank">Stepper motor</a> ($10-20 USD)
     * NEMA 17
     * 60mm body (If your window needs less than 20 lbs to move, you can use a 48mm body)
 
-3. <a href="https://amzn.to/3xVVnuL" target="_blank">Lead screw</a>
+3. <a href="https://amzn.to/3xVVnuL" target="_blank">Lead screw</a> ($6-10 USD)
     * T8 Trapazoidal
     * 400mm length
 
-**Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a nicer build.
+**Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a nicer build. ($9-23 USD)
 
 4. <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply Option 1</a> 
     * 12V  
