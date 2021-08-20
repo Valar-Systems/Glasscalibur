@@ -52,6 +52,10 @@ In order to properly attach the window mount (white piece in the above photo), y
 
 The deivce is just under 22" from end to end. This means your window needs to be at least 44" wide. Also add in 2 inches to be safe. So your window needs to be 46" wide from end to end.
 
+### Is your window too heavy?
+
+The motor has been tested to move up to 40 lbs. However, this is extrememly heavy and may cause problems. If your window is this heavy, lubricate it with dry silicone spray and check if that helps.
+
 
 ## How to build it
 
