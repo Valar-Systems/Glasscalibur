@@ -64,9 +64,9 @@ This build includes many different screws, nuts, and hardware that are difficult
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
 
 * Total parts cost: ~$130 USD
-* Total print time: 24 hours
 * Total filament costs: ~$10 USD
-* (You can also purchase the 3D prints for $40 USD)
+* Total print time: ~24 hours (You can also purchase the 3D prints for $40 USD)
+* Toal assembly time: ~20 minutes
 
 Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewhere.
 
