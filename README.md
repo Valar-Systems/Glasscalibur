@@ -85,7 +85,7 @@ Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewh
     * T8 Trapezoidal
     * 400mm length
 
-**Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a nicer build. ($9-23 USD)
+**12V Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a nicer build. ($9-23 USD)
 
 4. <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply Option 1</a> 
     * 12V  
