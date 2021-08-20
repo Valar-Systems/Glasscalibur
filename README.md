@@ -96,6 +96,22 @@ Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewh
     3. <a href="https://amzn.to/3CTFUz3" target="_blank">22/2 Wire</a>
 
 
+## How to 3D print it
+
+You window might **from** the left **to** the right, or it might open **from** the right **to** the left.
+
+The only version available is the ability to open from right to left. The other version will be added at a later time.
+
+Go to the repo folder "hardware" -> "Plastics" -> "open-left" -> "platters"
+
+These PrusaSlicer platters are set up to print. Otherwise just open the STLs individually (not recommended). 
+
+### Print Settings:
+* Use PETG **only**
+* 0.25 mm layer height
+* In PrusaSlicer go to "Print Settings" -> "Seam position" -> set to "Rear"
+
+
 ## How to install it
 
 Installation is **super easy**. Total install time is just a few minutes. Attach 2 mounts, wait 24 hours for the adhesives to build some strength, and start using.
