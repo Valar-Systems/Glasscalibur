@@ -63,10 +63,10 @@ To decrease the price even more, please 3D print the parts in the "hardware" fol
 
 **Short Story:**
 
-Total parts cost: ~$130 USD
-Total print time: 24 hours
-Total filament costs: ~$10
-(You can also purchase the 3D prints for $40)
+* Total parts cost: ~$130 USD
+* Total print time: 24 hours
+* Total filament costs: ~$10
+* (You can also purchase the 3D prints for $40)
 
 Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewhere.
 
