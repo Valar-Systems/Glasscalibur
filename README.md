@@ -68,10 +68,10 @@ To decrease the price even more, please 3D print the parts in the "hardware" fol
 * Total print time: ~24 hours (You can also purchase the 3D prints for $40 USD)
 * Toal assembly time: ~20 minutes
 
-Purchase these parts. Feel free to find cheaper alternatives on Amazon or elsewhere.
+Purchase these **4 parts**. Feel free to find cheaper alternatives on Amazon or elsewhere.
 
 1.  Electronics & hardware kit
-
+    
     ![window opener parts](/media/parts.jpg)
 
     * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) ($99 USD)
