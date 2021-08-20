@@ -4,6 +4,16 @@ The Model-H is a smart window opener that uses HTTP requests to open and close y
 
 ![window opener GIF](/media/window-gif.gif)
 
+
+## How it works
+
+This video has the top cover removed to help you see it better.
+
+![window opener GIF](/media/top-gif.gif)
+
+The Model-H uses a NEMA 17 stepper motor that is connected to a lead screw. A custom PCB with ESP32 and TMC2209 drives the motor. Two hall effect limit switches on each end stop the motor when it reaches the end.
+
+
 ## Safety features
 
 Safety is the primary concern with this device. 
@@ -70,11 +80,13 @@ Next, attach the sill mount.
 
 Wait 24 hours for the adhesives to set and you can now use the window opener.
 
+
 ## Sending commands
 
 Commands are sent via HTTP requests
 
 Follow the instructions outlined in the ![firmware](/firmware) folder.
+
 
 ## Node-RED workflow
 
