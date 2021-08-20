@@ -2,14 +2,14 @@
 
 The Model-H is a smart window opener that uses HTTP requests to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
 
-![window opener GIF](/media/window-gif.gif)
+![window opener main](/media/window-gif.gif)
 
 
 ## How it works
 
 This video has the top cover removed to help you see it better.
 
-![window opener GIF](/media/top-gif.gif)
+![window opener top](/media/top-gif.gif)
 
 The Model-H uses a NEMA 17 stepper motor that is connected to a lead screw. A custom PCB with ESP32 and TMC2209 drives the motor. Two hall effect limit switches on each end stop the motor when it reaches the end.
 
@@ -75,6 +75,10 @@ Here is everything you will need to purchase. Feel free to find cheaper alternat
 
 
 ## How to install it
+
+Installation is **super easy**. Total install time is just a few minutes. Attach 2 mounts, wait 24 hours for the adhesives to build some strength, and start using.
+
+![window opener mount](/media/mount-gif.gif)
 
 There are 2 mounts that are attached with adhesive. If necessary, you can also use a screw into the sill, but that has been required. 
 
