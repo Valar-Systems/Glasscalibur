@@ -36,11 +36,15 @@ The maximum distance from the top of the window frame to the sill is 2 inches (R
 In order to properly attach the window mount (white piece in the above photo), your window needs 14mm of the lower sash of the window to be exposed.
 
 
-## How to built it
+## How to build it
+
+**Long story:**
 
 This build includes a large number of different screws, nuts, and hardware that are difficult to find. In order to bring the cost of building this to the lowest possible level, we have created a kit, as well as a list of additional required hardware from Amazon. By purchasing the large and heavy products from Amazon, we are able to decrease the total cost of the entire build to an affordable level.
 
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
+
+**Short Story:**
 
 Here is everything you will need to purchase. Feel free to find cheaper alternatives on Amazon or elsewhere.
 
@@ -56,7 +60,7 @@ Here is everything you will need to purchase. Feel free to find cheaper alternat
     * T8 Trapazoidal
     * 400mm length
 
-**Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a cleaner build.
+**Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a nicer build.
 
 4. <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply Option 1</a> 
     * 12V  
