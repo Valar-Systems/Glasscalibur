@@ -61,6 +61,8 @@ The motor has been tested to move up to 40 lbs. However, this is extremely heavy
 
 This build includes many different screws, nuts, and hardware that are difficult to source. To bring the cost of building this to the lowest possible level, we have created a kit.
 
+![window opener GIF](/media/window-kit.jpg)
+
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
 
 * Total filament cost: ~$10 USD
