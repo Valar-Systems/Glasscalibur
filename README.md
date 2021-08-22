@@ -70,7 +70,6 @@ To decrease the price even more, please 3D print the parts in the "hardware" fol
     * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) 
     * [**Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187) 
 
-
 ## How to 3D print it
 
 Your window might open **from** the left **to** the right, or it might open **from** the right **to** the left.
