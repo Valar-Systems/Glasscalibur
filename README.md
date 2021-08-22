@@ -59,44 +59,16 @@ The motor has been tested to move up to 40 lbs. However, this is extremely heavy
 
 ## How to build it
 
-This build includes many different screws, nuts, and hardware that are difficult to find. To bring the cost of building this to the lowest possible level, we have created a kit, as well as a list of additional required hardware from Amazon. By purchasing the large and heavy products from Amazon, we can decrease the total cost of the entire build to an affordable level.
+This build includes many different screws, nuts, and hardware that are difficult to source. To bring the cost of building this to the lowest possible level, we have created a kit.
 
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
 
-* Total parts cost: ~$130 USD
-* Total filament costs: ~$10 USD
+* Total filament cost: ~$10 USD
 * Total print time: ~24 hours (You can also purchase the 3D prints for $40 USD)
 * Toal assembly time: ~20 minutes
 
-Purchase these **4 parts**. Feel free to find cheaper alternatives on Amazon or elsewhere.
-
-1.  Electronics & hardware kit
-    
-    ![window opener parts](/media/parts.jpg)
-
-    * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) ($99 USD)
-    * [**Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187) ($139 USD)
-
-2. <a href="https://amzn.to/2XAAUiN" target="_blank">Stepper motor</a> ($10-20 USD)
-    * NEMA 17
-    * 60mm body (If your window needs less than 20 lbs to move, you can use a 48mm body)
-
-3. <a href="https://amzn.to/3xVVnuL" target="_blank">Lead screw</a> ($6-10 USD)
-    * T8 Trapezoidal
-    * 400mm length
-
-**12V Power Supply:** Be sure to note how long your cord needs to be. Please purchase #5 below for a nicer build. ($9-23 USD)
-
-4. <a href="https://amzn.to/3xVVnuL" target="_blank">Power Supply Option 1</a> 
-    * 12V  
-    * 3A+
-    * 2.5mm x 5.5mm barrel connector size
-    * Center positive pin
-
-5. Use these parts for a cleaner build. You can customize the length of the power wire which is also much thinner and easier to hide.
-    1. <a href="https://amzn.to/3k75ist" target="_blank">Power Supply Option 2</a>
-    2. <a href="https://amzn.to/2VV82S1" target="_blank">Barrel Adapter</a>
-    3. <a href="https://amzn.to/3CTFUz3" target="_blank">22/2 Wire</a>
+    * [**Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) 
+    * [**Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187) 
 
 
 ## How to 3D print it
