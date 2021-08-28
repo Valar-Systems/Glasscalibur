@@ -94,7 +94,7 @@ Installation is **super easy**. Total install time is just a few minutes. Attach
 
 ![window opener mount](/media/mount-gif.gif)
 
-There are 2 mounts that are attached with adhesive. If necessary, you can also use a screw into the sill, but that has been required. 
+There are 2 mounts that are attached with adhesive. If necessary, you can also use a screw into the sill, but that has not been required. 
 
 First attach the window mount.
 
