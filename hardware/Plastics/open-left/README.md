@@ -1,6 +1,12 @@
-# Build Guide
+# Print Guide
 
-To learn to assemble the 3D prints, click the image below to be redirected to the YouTube video
+There are two folders to choose from. The STL folder contains the STLs for each individual part
 
-[![Youtube Link](/media/node-red-flow.jpg)](https://youtu.be/ou7uRED_ff0)
- 
+The platter folder contains two platters which have all parts laid in the correct orientations.
+
+**Printing the platters is recommended**
+
+### Print Settings:
+* Use PETG only
+* 0.25 mm layer height
+* In PrusaSlicer go to "Print Settings" -> "Seam position" -> set to "Rear"
