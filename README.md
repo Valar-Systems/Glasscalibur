@@ -2,7 +2,11 @@
 
 The Model-H is a smart window opener that uses HTTP requests to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
 
-![window opener main](/media/window-gif.gif)
+# Build Guides
+
+You can find the assembly instructions and video in the [hardware folder](/hardware).
+
+You can find the window attachment guide in the [hardware folder](/hardware).
 
 ## Use cases
 
@@ -15,6 +19,8 @@ While you can use Alexa, Google or other voice control, home automation is where
 4. Set a schedule to listen to the morning birds chirp
 
 ## How it works
+
+![window opener main](/media/window-gif.gif)
 
 This video has the top cover removed to help you see it better.
 
