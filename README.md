@@ -88,11 +88,6 @@ Go to the repo folder "hardware" -> "Plastics" -> "open-left" -> "platters"
 
 These PrusaSlicer platters are set up to print. Otherwise just print the STLs individually (not recommended because print orientation is critical). 
 
-### Print Settings:
-* Use PETG **only**
-* 0.25 mm layer height
-* In PrusaSlicer go to "Print Settings" -> "Seam position" -> set to "Rear"
-
 
 ## How to install it
 
