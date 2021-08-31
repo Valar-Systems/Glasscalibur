@@ -11,4 +11,4 @@ To assemble the 3D printed parts, click the image below to watch the YouTube set
 ## Window Attachment Guide
 To attach this device to your window, click the image below to watch the YouTube setup video.
 
-![plastics](/plastics)
+[![Youtube Link](/media/model-h-install-cover.jpg)](https://youtu.be/v3KJi99peHg)
