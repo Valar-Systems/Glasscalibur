@@ -71,8 +71,7 @@ This build includes many different screws, nuts, and hardware that are difficult
 
 To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
 
-* Total filament cost: ~$10 USD
-* Total print time: ~24 hours (You can also purchase the 3D prints for $40 USD)
+* Total print time: ~24 hours (You can also purchase the 3D prints)
 * Toal assembly time: ~20 minutes
 
     * [Link to kit **Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) 
