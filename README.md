@@ -65,17 +65,16 @@ The motor has been tested to move up to 40 lbs. However, this is extremely heavy
 
 ## How to build it
 
-This build includes many different screws, nuts, and hardware that are difficult to source. To bring the cost of building this to the lowest possible level, we have created a kit.
+To make this affordable to build, we have created a kit. Otherwise, sourcing the screws and hardware individually gets very expensive.
 
+### Kits
+
+There are two versions of the kit. One with plastics and one without. If you have a 3D printer, feel free to print your own.
+
+* [Link to kit **Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) 
+* [Link to kit **Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187) 
+    
 ![window opener GIF](/media/window-kit.jpg)
-
-To decrease the price even more, please 3D print the parts in the "hardware" folder. If you do not have a 3D printer, you may purchase a kit with 3D printed parts.
-
-* Total print time: ~24 hours (You can also purchase the 3D prints)
-* Toal assembly time: ~20 minutes
-
-    * [Link to kit **Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) 
-    * [Link to kit **Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187) 
 
 ## How to 3D print it
 
