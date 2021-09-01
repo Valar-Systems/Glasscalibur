@@ -28,6 +28,8 @@ This video has the top cover removed to help you see it better.
 
 The Model-H uses a NEMA 17 stepper motor that is connected to a lead screw. A custom PCB with ESP32 and TMC2209 drives the motor. Two hall effect limit switches on each end stop the motor when it reaches the end.
 
+![window opener top](/media/model-h-pcb.jpg)
+
 
 ## Safety features
 
