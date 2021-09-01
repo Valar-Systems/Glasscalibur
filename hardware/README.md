@@ -3,6 +3,8 @@
 ## 3D Printing
 To print the 3D printed parts, go to the [plastics](/hardware/Plastics) folder.
 
+To learn to assemble to device, or to attach it to your window, see guides below.
+
 ## Assembly Guide
 To assemble the 3D printed parts, click the image below to watch the YouTube setup video.
 
@@ -11,4 +13,4 @@ To assemble the 3D printed parts, click the image below to watch the YouTube set
 ## Window Attachment Guide
 To attach this device to your window, click the image below to watch the YouTube setup video.
 
-[![Youtube Link](/media/model-h-install-cover.jpg)](https://youtu.be/v3KJi99peHg)
+[![Youtube Link](/media/model-h-install-cover.jpg)](https://youtu.be/U9Z4wx_hrW4)
