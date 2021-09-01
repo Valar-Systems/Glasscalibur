@@ -14,3 +14,11 @@ To assemble the 3D printed parts, click the image below to watch the YouTube set
 To attach this device to your window, click the image below to watch the YouTube setup video.
 
 [![Youtube Link](/media/model-h-install-cover.jpg)](https://youtu.be/U9Z4wx_hrW4)
+
+## Window Calibration and automation
+
+Once your window opener is installed, we need to calibrate it so that it will stop automatically in case something gets in the way. 
+
+The auto calibration will automatically figure out how much current your window needs to open. We need to keep the current to a minimum level for safety reasons, just in case something gets in the way. 
+
+
