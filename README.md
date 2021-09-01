@@ -84,10 +84,7 @@ Your window might open **from** the left **to** the right, or it might open **fr
 
 The only version available is the ability to open from right to left. The other version will be added later.
 
-Go to the repo folder "hardware" -> "Plastics" -> "open-left" -> "platters"
-
-These PrusaSlicer platters are set up to print. Otherwise just print the STLs individually (not recommended because print orientation is critical). 
-
+Go to the repo folder ["hardware" -> "Plastics"](/hardware/Plastics)
 
 ## How to install it
 
