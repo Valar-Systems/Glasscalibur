@@ -39,7 +39,7 @@ In case of emergencies, the entire device can be instantly removed for your wind
 
 ![window opener main](/media/hand-gif.gif)
 
-In case an object or limb gets in the way during window operations, the device will automatically stop and save its location. 
+In case an object or limb gets in the way during window operations, the device will automatically stop and save its location. Only 5 lbs. of force is required to trigger it to stop.
 
 In the event that you leave the window locked, the device will automatically detect a locked window and stop the motor.
 
