@@ -1,5 +1,5 @@
 //CHANGE THIS VALUE TO SWITCH THE DIRECTION THE MOTER TURNS
-#define SHAFT true
+#define SHAFT false
 
 #include "soc/timer_group_struct.h"
 #include "soc/timer_group_reg.h"
