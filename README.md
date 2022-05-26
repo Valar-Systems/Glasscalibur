@@ -1,4 +1,4 @@
-# Model-H: Automated Horizontal Window Opener
+# Glasscalibur: Automated Horizontal Window Opener
 
 The Model-H is a smart window opener that uses HTTP requests to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
 
