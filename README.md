@@ -1,6 +1,6 @@
 # Glasscalibur: Automated Horizontal Window Opener
 
-The Model-H is a smart window opener that uses HTTP requests to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
+Glasscalibur is a smart window opener that uses HTTP requests to open and close your windows. Combine it with Node-RED, Home Assistant, or any other system capable of sending HTTP requests and get your window to open and close automatically.
 
 # Build Guides
 
@@ -26,7 +26,7 @@ This video has the top cover removed to help you see it better.
 
 ![window opener top](/media/top-gif.gif)
 
-The Model-H uses a NEMA 17 stepper motor that is connected to a lead screw. A custom PCB with an ESP32 and TMC2209 drives the motor. Two hall effect sensors on each end stop the motor when it reaches the end.
+Glasscalibur uses a NEMA 17 stepper motor that is connected to a lead screw. A custom PCB with an ESP32 and TMC2209 drives the motor. Two hall effect sensors on each end stop the motor when it reaches the end.
 
 ![window opener top](/media/model-h-pcb.jpg)
 
