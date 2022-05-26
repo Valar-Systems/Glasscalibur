@@ -5,7 +5,7 @@ volatile uint32_t g_buttonPressTime = -1;
 
 
 
-void button_action(void)
+void button_action()
 {
   preferences.putInt ("wifi_set", 0);
   preferences.putString ("ssid", "NO_SSID");
@@ -14,7 +14,7 @@ void button_action(void)
   ESP.restart();
 }
 
-void button_change(void)
+void button_change()
 {
   Serial.println("WiFi Reset Pressed");
   bool buttonState = !digitalRead(WIFI_PIN);
