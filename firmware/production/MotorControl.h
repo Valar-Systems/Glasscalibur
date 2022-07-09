@@ -92,7 +92,7 @@ void move_motor() {
   {
 
     Serial.println("Closing until Trip");
-    stepper->moveTo(-one_inch * 20);
+    stepper->moveTo(-one_inch * 25);
     motor_running = true;
 
     while (stepper->getCurrentPosition() != stepper->targetPos())
