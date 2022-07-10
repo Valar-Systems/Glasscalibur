@@ -137,9 +137,9 @@ serverAPI.on("/position", HTTP_GET, [](AsyncWebServerRequest *request){
         AsyncWebParameter* p = request->getParam(i);
     }
 
-    if(request->hasParam("move_to_percent"))
+    if(request->hasParam("percent"))
     {
-        move_to_percent = request->getParam("move_to_percent")->value().toInt();
+        move_to_percent = request->getParam("percent")->value().toInt();
         move_to_step = (max_steps/100)*move_to_percent;
         Serial.print("move_to_percent: ");
         Serial.println(move_to_percent); 

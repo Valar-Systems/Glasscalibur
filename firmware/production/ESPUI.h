@@ -953,7 +953,7 @@ void ESPUIsetup(){
    
 //Tab5: API 
    char apiPosition[50];
-   snprintf(apiPosition, sizeof(apiPosition), "http://%s:8080/position?move_to_percent=%i", ip_address.c_str(), move_to_percent);
+   snprintf(apiPosition, sizeof(apiPosition), "http://%s:8080/position?percent=%i", ip_address.c_str(), move_to_percent);
    ESPUI.addControl(ControlType::Label, "Move to Position", apiPosition, ControlColor::Turquoise, tab5);
    
    char apisettings[50];
