@@ -10,7 +10,7 @@ time_t newOpenTime;
 time_t newCloseTime;
 
 String ip_address;
-String hostname = "valar-systems";
+String hostname = "Glasscalibur";
 
 AsyncWebServer serverAPI(8080);
 
