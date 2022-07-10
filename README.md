@@ -20,15 +20,15 @@ While you can use Alexa, Google or other voice control, home automation is where
 
 ## How it works
 
-![window opener main](/media/window-gif.gif)
+![window opener main](/media/readme/window-gif.gif)
 
 This video has the top cover removed to help you see it better.
 
-![window opener top](/media/top-gif.gif)
+![window opener top](/media/readme/top-gif.gif)
 
 Glasscalibur uses a NEMA 17 stepper motor that is connected to a lead screw. A custom PCB with an ESP32 and TMC2209 drives the motor. Two hall effect sensors on each end stop the motor when it reaches the end.
 
-![window opener top](/media/model-h-pcb.jpg)
+![window opener top](/media/readme/model-h-pcb.jpg)
 
 
 ## Safety features
@@ -37,7 +37,7 @@ Safety is the primary concern with this device.
 
 In case of emergencies, the entire device can be instantly removed for your window. (see GIF above)
 
-![window opener main](/media/hand-gif.gif)
+![window opener main](/media/readme/hand-gif.gif)
 
 In case an object or limb gets in the way during window operations, the device will automatically stop and save its location. Only 5 lbs. of force is required to trigger it to stop.
 
@@ -50,7 +50,7 @@ Before you get too excited and buy/build this, please be sure it will work on yo
 
 ### Is your window sill the correct height?
 
-![window opener GIF](/media/window-sill.jpg)
+![window opener GIF](/media/readme/window-sill.jpg)
 
 The maximum distance from the top of the window frame to the sill is 2 inches (Red text in the image above). Any more than 2 inches and you will need to raise the window opener. One solution is to use a piece of wood such as a 1x4 or 2x4 in order to elevate the entire device.
 
@@ -76,7 +76,7 @@ There are two versions of the kit. One with plastics and one without. If you hav
 * [Link to kit **Excluding** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955) 
 * [Link to kit **Including** 3D printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187) 
     
-![window opener GIF](/media/window-kit.jpg)
+![window opener GIF](/media/readme/window-kit.jpg)
 
 ## How to 3D print it
 
@@ -90,7 +90,7 @@ Go to the repo folder ["hardware" -> "Plastics"](/hardware/Plastics)
 
 Installation is **super easy**. Total install time is just a few minutes. Attach 2 mounts, wait 24 hours for the adhesives to build some strength, and start using.
 
-![window opener mount](/media/mount-gif.gif)
+![window opener mount](/media/readme/mount-gif.gif)
 
 There are 2 mounts that are attached with adhesive. If necessary, you can also use a screw into the sill, but that has not been required. 
 
@@ -112,4 +112,4 @@ Follow the instructions outlined in the ![firmware](/firmware) folder.
 
 Use Node-RED in Home Assistant to automate everything. Click the image below to watch a YouTube video on how it works.
 
-[![Youtube Link](/media/node-red-flow.jpg)](https://youtu.be/ou7uRED_ff0)
+[![Youtube Link](/media/readme/node-red-flow.jpg)](https://youtu.be/ou7uRED_ff0)
