@@ -3,25 +3,23 @@ uint16_t positionLabel;
 #include "soc/timer_group_struct.h"
 #include "soc/timer_group_reg.h"
 
-#define STEP_PIN  15
-#define DIR_PIN  14
+#define STEP_PIN  17
+#define DIR_PIN  16
 #define ENABLE_PIN 27
 
-#define RXD2 16
-#define TXD2 17
-#define STALLGUARD 2
-#define SENSOR1 32
-#define SENSOR2 22
+#define RXD2 19
+#define TXD2 21
+#define STALLGUARD 18
+#define SENSOR1 34
+#define SENSOR2 35
 
-//#define LED1 33
-//#define LED2 18
-//#define BUTTON1 23
-//#define BUTTON2 34
+#define BUTTON2 22
+#define BUTTON1 23
 
-#define BUTTON2 23
-#define BUTTON1 34
-#define LED2 33
-#define LED1 18
+#define SCK 32
+#define MISO 14
+#define MOSI 33
+#define nCS 15
 
 #define SHAFT true
 
@@ -32,6 +30,7 @@ uint16_t positionLabel;
 FastAccelStepperEngine engine = FastAccelStepperEngine();
 FastAccelStepper *stepper = NULL;
 TMC2209Stepper driver(&SERIAL_PORT_2, R_SENSE , DRIVER_ADDRESS);
+MagneticSensorMT6835 sensor = MagneticSensorMT6835(nCS);
 
 void IRAM_ATTR button1pressed()
 {
@@ -235,19 +234,4 @@ void setup_motors() {
   attachInterrupt(BUTTON2, button2pressed, FALLING);
   attachInterrupt(SENSOR1, sensor_long, FALLING);
   attachInterrupt(SENSOR2, sensor_short, FALLING);
-}
-
-void setup_leds() {
-
-  ledcAttachPin(LED1, 1); // assign a led pins to a channel
-  ledcAttachPin(LED2, 0); // assign a led pins to a channel
-
-  ledcSetup(0, 5000, 8); // 12 kHz PWM, 8-bit resolution
-  ledcSetup(1, 5000, 8); // 12 kHz PWM, 8-bit resolution
-
-  pinMode(LED1, OUTPUT);
-  pinMode(LED2, OUTPUT);
-
-  ledcWrite(0, 0); // turn off LED
-  ledcWrite(1, 0); // turn off LED
 }

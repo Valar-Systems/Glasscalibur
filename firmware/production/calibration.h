@@ -1,6 +1,7 @@
-TaskHandle_t CurrentCalibrationTaskHandle;
-TaskHandle_t StallCalibrationTaskHandle;
-
+TaskHandle_t CurrentCalibrationTask;
+TaskHandle_t StallCalibrationTask;
+TaskHandle_t MotorTask;
+TaskHandle_t ButtonTask;
 
 void ClosePosition()
 {
@@ -201,7 +202,7 @@ void TravelDistance()
 
 
 
-void CurrentCalibrationTask(void *pvParameters) // UART Current Task// Change current settings depending on location
+void CurrentCalibrationCode(void *pvParameters) // UART Current Task// Change current settings depending on location
 {
 (void)pvParameters;
 
@@ -219,6 +220,7 @@ printf("Starting Current Calibration\n");
     }
     else
     {
+    Serial.println(driver.SG_RESULT());
     vTaskDelay(1);
     }
   }
@@ -232,13 +234,13 @@ void CalibrateCurrent() //AUTO CURRENT
   sensor2_trip = false;
   
   //vTaskSuspend(CurrentChangeHandle);
-  //vTaskSuspend(StateChangeHandle);
+  vTaskSuspend(ButtonTask);
 
   stepper->setAcceleration(accel);
   stepper->setSpeedInHz(max_speed);
 
   current_cal = 300;
-  stall_cal = 30;
+  stall_cal = 5;
 
   driver.rms_current(current_cal);
   driver.SGTHRS(stall_cal);
@@ -247,12 +249,12 @@ void CalibrateCurrent() //AUTO CURRENT
   printf("Stall set to: %i\n", stall_cal);
   
   xTaskCreatePinnedToCore(
-      CurrentCalibrationTask //Change Current
+      CurrentCalibrationCode //Change Current
       , "CurrentCalibrationTask"
       , 1024 * 4 // Stack size
       , NULL
       , 2 // Priority
-      , &CurrentCalibrationTaskHandle
+      , &CurrentCalibrationTask
       , 0);
 
 
@@ -312,15 +314,16 @@ void CalibrateCurrent() //AUTO CURRENT
   current = current_cal + 100;
   printf("current_high: %i\n", current);
 
-  vTaskDelete(CurrentCalibrationTaskHandle);
-
+  vTaskDelete(CurrentCalibrationTask);
+  vTaskResume(ButtonTask);
+  
   preferences.putInt ("current", current);
   printf("current_high = %d\n", current);
 
   }
 
 
-void StallCalibrationTask(void *pvParameters) // UART Current Task// Change current settings depending on location
+void StallCalibrationCode(void *pvParameters) // UART Current Task// Change current settings depending on location
 {
   (void)pvParameters;
 
@@ -336,6 +339,7 @@ void StallCalibrationTask(void *pvParameters) // UART Current Task// Change curr
     else
     {
         vTaskDelay(1);
+        Serial.println(driver.SG_RESULT());
     }
   }
 }
@@ -345,23 +349,23 @@ void CalibrateStall() //AUTO CURRENT
   printf("STEP 3: Setting Stall: \n");
 
   //vTaskSuspend(CurrentChangeHandle);
-  //vTaskSuspend(StateChangeHandle);
+  vTaskSuspend(ButtonTask);
   
   stepper->setAcceleration(accel);
   stepper->setSpeedInHz(max_speed);
 
-  stall_cal = 70;//100
+  stall_cal = 255;//100
 
   driver.SGTHRS(stall_cal);
   driver.rms_current(current);
 
   xTaskCreatePinnedToCore(
-      StallCalibrationTask //Change Current
+      StallCalibrationCode //Change Current
       , "StallCalibrationTask"
       , 1024 * 4// Stack size
       , NULL
       , 1 // Priority
-      , &StallCalibrationTaskHandle
+      , &StallCalibrationTask
       , 0);
 
   //stepper.enableOutputs();
@@ -419,6 +423,7 @@ void CalibrateStall() //AUTO CURRENT
   stall = stall_cal - 20; //Subract 10 to make it not so sensative
 
   printf("stall: %i\n", stall);
-  vTaskDelete(StallCalibrationTaskHandle);
+  vTaskDelete(StallCalibrationTask);
+  vTaskResume(ButtonTask);
   preferences.putInt ("stall", stall);
   }
