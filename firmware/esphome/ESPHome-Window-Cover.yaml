@@ -13,20 +13,21 @@
 # Button Calibration: 21
 # Button Move: 29
 
-
-
-
 external_components:
   - source: github://slimcdk/esphome-custom-components
     components: [tmc2209_hub, tmc2209, stepper]
 
+## 1.91666666667 revolutions to move 1mm
+## 121 mm travel distance
+
+# 1.9167 x 121 = 231.9207 revolutions to move full distance
+
 substitutions:
-  max_distance_cm: "80" # full blinds length (in centimeters) // CHANGE TO SUIT YOUR SETUP
   stepper_direction: "ccw" # change to "cw" or "ccw" to change direction
 
-  gear_distance_cm: "3.7699" # Use for MK7 drive gear // The curtain will move 3.7699 cm per revolution
   steps_per_revolution: "1600"
-  max_distance_revs: "float(${max_distance_cm})/${gear_distance_cm}"
+  max_distance_revs: "float(231.9207)"
+
   max_distance_steps: "${max_distance_revs}*${steps_per_revolution}" # converts cm to steps. Use this in remaining code
 
 api:
@@ -57,7 +58,7 @@ esphome:
     - tmc2209.currents:
         standstill_mode: freewheeling
         #irun: 20 # 0-31. 31 = 2A current
-        run_current: 1500
+        run_current: 400
         ihold: 0
         tpowerdown: 0
         iholddelay: 0
@@ -70,9 +71,9 @@ uart:
 stepper:
   - platform: tmc2209
     id: driver
-    max_speed: 2000 steps/s # Faster speed is louder
-    acceleration: 2000 steps/s^2
-    deceleration: 3000 steps/s^2
+    max_speed: 1000 steps/s # Faster speed is louder
+    acceleration: 1000 steps/s^2
+    deceleration: 1000 steps/s^2
     config_dump_include_registers: true
     rsense: 220 mOhm
     vsense: False
@@ -91,33 +92,6 @@ binary_sensor:
    name: Button 1
    id: btn1
    pin:
-     number: 4
-     mode: INPUT
-     inverted: true
-   filters:
-     - delayed_on: 10ms
-   on_press:
-     then:
-       - if:
-           condition:
-             cover.close: ropener_cover    # Condition
-           then:
-             - cover.stop: ropener_cover   # If true
-           else:
-             - cover.close: ropener_cover  # If false
-   on_click: # Sets the current position to maximum.
-      min_length: 3000ms
-      max_length: 10000ms
-      then:
-        - stepper.report_position:
-            id: driver
-            position: !lambda return ${max_distance_steps};
-        - logger.log: "Homed cover"
-
- - platform: gpio
-   name: Button 1
-   id: btn1
-   pin:
      number: 29
      mode: INPUT
      inverted: true
@@ -129,6 +103,31 @@ binary_sensor:
    on_double_click:
      then:
      - cover.open: ropener_cover
+
+ - platform: gpio
+   name: Limit Switch 1
+   id: limit_switch_1
+   pin:
+     number: 15
+     mode: INPUT
+     inverted: true
+    # ...
+   on_press:
+     then:
+     - cover.stop: ropener_cover
+
+ - platform: gpio
+   name: Limit Switch 2
+   id: limit_switch_2
+   pin:
+     number: 3
+     mode: INPUT
+     inverted: true
+    # ...
+   on_press:
+     then:
+     - cover.stop: ropener_cover
+
 
 
 cover:
@@ -144,10 +143,12 @@ cover:
       - stepper.set_target:
           id: driver
           target: 0
+    open_endstop: limit_switch_1
     close_action:
       - stepper.set_target:
           id: driver
           target: !lambda return ${max_distance_steps};
+    close_endstop: limit_switch_2
     position_action:
       - stepper.set_target:
           id: driver
