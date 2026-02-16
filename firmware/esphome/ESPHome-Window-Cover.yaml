@@ -1,3 +1,21 @@
+# PDNUART: 0
+# TMC_TX: 1
+# LED BlUE: 2
+# LIMIT 2: 3
+# LED RED: 4
+# BUZZER: 5
+# INDEX: 6
+# TMC_EN: 8
+# Acceleromter Inerrupt: 12
+# LIMIT 1: 15
+# SDA: 19
+# SCL: 20
+# Button Calibration: 21
+# Button Move: 29
+
+
+
+
 external_components:
   - source: github://slimcdk/esphome-custom-components
     components: [tmc2209_hub, tmc2209, stepper]
@@ -19,7 +37,7 @@ ota:
 logger:
 
 esp32:
-  board: esp32-c3-devkitm-1
+  board: esp32-c6-devkitm-1
   framework:
     type: esp-idf
 
@@ -38,14 +56,15 @@ esphome:
         threshold: 50
     - tmc2209.currents:
         standstill_mode: freewheeling
-        irun: 31 # 0-31. 31 = 2A current
+        #irun: 20 # 0-31. 31 = 2A current
+        run_current: 1500
         ihold: 0
         tpowerdown: 0
         iholddelay: 0
 
 uart:
-  tx_pin: 6
-  rx_pin: 5
+  tx_pin: 1
+  rx_pin: 0
   baud_rate: 500000
 
 stepper:
@@ -55,7 +74,7 @@ stepper:
     acceleration: 2000 steps/s^2
     deceleration: 3000 steps/s^2
     config_dump_include_registers: true
-    rsense: 100 mOhm
+    rsense: 220 mOhm
     vsense: False
     enn_pin: 8
     index_pin: 0
@@ -96,17 +115,21 @@ binary_sensor:
         - logger.log: "Homed cover"
 
  - platform: gpio
-   name: Button 2
-   id: btn2
+   name: Button 1
+   id: btn1
    pin:
-     number: 3
+     number: 29
      mode: INPUT
      inverted: true
    filters:
      - delayed_on: 10ms
    on_release:
     then:
+    - cover.close: ropener_cover
+   on_double_click:
+     then:
      - cover.open: ropener_cover
+
 
 cover:
   - platform: template
