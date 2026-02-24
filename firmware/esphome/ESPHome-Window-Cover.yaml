@@ -5,13 +5,14 @@
 # LED RED: 4
 # BUZZER: 5
 # INDEX: 6
+# DIAG: 14
 # TMC_EN: 8
 # Acceleromter Inerrupt: 12
 # LIMIT 1: 15
 # SDA: 19
 # SCL: 20
 # Button Calibration: 21
-# Button Move: 29
+# Button Move: 23
 
 external_components:
   - source: github://slimcdk/esphome-custom-components
@@ -23,12 +24,13 @@ external_components:
 # 1.9167 x 121 = 231.9207 revolutions to move full distance
 
 substitutions:
-  stepper_direction: "ccw" # change to "cw" or "ccw" to change direction
+  #stepper_direction: "cw" # change to "cw" or "ccw" to change direction
 
   steps_per_revolution: "1600"
   max_distance_revs: "float(231.9207)"
 
-  max_distance_steps: "${max_distance_revs}*${steps_per_revolution}" # converts cm to steps. Use this in remaining code
+  #max_distance_steps: "${max_distance_revs}*${steps_per_revolution}" # converts cm to steps. Use this in remaining code
+  max_distance_steps: 371073 # converts cm to steps. Use this in remaining code
 
 api:
 
@@ -36,9 +38,10 @@ ota:
   - platform: esphome
 
 logger:
+  level: DEBUG
 
 esp32:
-  board: esp32-c6-devkitm-1
+  board: esp32-c6-devkitc-1
   framework:
     type: esp-idf
 
@@ -47,21 +50,53 @@ wifi:
   password: !secret wifi_password
 
 esphome:
-  name: ropener-office
+  name: glasscalibur-kids-bedroom
   on_boot:
+    priority: -100.0
+    then:
+    - delay: 1s
+    - logger.log:
+        format: "Button press detected."
+        tag: "my_custom_tag"
     - tmc2209.configure:
-        direction: ${stepper_direction}
+        direction: cw
         microsteps: 8
         interpolation: true
     - tmc2209.stallguard:
         threshold: 50
     - tmc2209.currents:
         standstill_mode: freewheeling
-        #irun: 20 # 0-31. 31 = 2A current
-        run_current: 400
+        # 0-31
+        # 20 = 0.3A current
+        # 24 = 0.5A current
+        irun: 26 # 26 = 0.6A current. DO NOT EXCEED. MOTOR GETS STUPID HOT.
+        #run_current: 300m
         ihold: 0
         tpowerdown: 0
         iholddelay: 0
+    - logger.log: "CHECKING LIMIT SWITCHES"
+    - if:      # NEED TO CHECK IF EITHER LIMIT SWITCH IS PRESSED AND SET POSITION BASED ON THAT
+        condition:
+          binary_sensor.is_on: limit_switch_1  # Check if switch is pressed
+        then:
+          - logger.log: "LIMIT 1"
+          - stepper.report_position:
+              id: driver
+              position: 371073
+    - if:
+        condition:
+          binary_sensor.is_on: limit_switch_2  # Check if switch is pressed
+        then:
+          - logger.log: "LIMIT 2"
+          - stepper.report_position:
+              id: driver
+              position: 0
+
+# then:
+#       - lambda: |-
+#           if (!id(limit_switch_1).state) {
+#             ESP_LOGI("boot", "Pin is HIGH");
+#           }
 
 uart:
   tx_pin: 1
@@ -71,64 +106,91 @@ uart:
 stepper:
   - platform: tmc2209
     id: driver
-    max_speed: 1000 steps/s # Faster speed is louder
+    #max_speed: 1500 steps/s # Faster speed is louder #2000 good. #1500 great
+    max_speed: 1200 steps/s # Faster speed is louder #2000 good. #1500 great
     acceleration: 1000 steps/s^2
-    deceleration: 1000 steps/s^2
+    deceleration: 100000 steps/s^2 # Stop very fast in case limit swith reached
     config_dump_include_registers: true
     rsense: 220 mOhm
     vsense: False
     enn_pin: 8
-    index_pin: 0
-    diag_pin: 1
-    on_stall:
-      - stepper.stop: driver
-      - stepper.report_position:
-          id: driver
-          position: !lambda return ${max_distance_steps};
-      - logger.log: "Homed cover"
+    index_pin: 6
+    diag_pin: 14
+    #on_stall:
+      #- stepper.stop: driver
+
+# id(ropener_cover)->current_operation
+# COVER_OPERATION_IDLE, COVER_OPERATION_OPENING, COVER_OPERATION_CLOSING
 
 binary_sensor:
- - platform: gpio
-   name: Button 1
-   id: btn1
-   pin:
-     number: 29
-     mode: INPUT
-     inverted: true
-   filters:
-     - delayed_on: 10ms
-   on_release:
-    then:
-    - cover.close: ropener_cover
-   on_double_click:
-     then:
-     - cover.open: ropener_cover
+  - platform: gpio
+    name: Button 1
+    id: btn1
+    pin:
+      number: 23
+      mode: INPUT
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+    on_multi_click:
 
- - platform: gpio
-   name: Limit Switch 1
-   id: limit_switch_1
-   pin:
-     number: 15
-     mode: INPUT
-     inverted: true
-    # ...
-   on_press:
-     then:
-     - cover.stop: ropener_cover
+      # --- Single Click ---
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - cover.close: ropener_cover
+          # - if:
+          #     condition: ## If moving, then stop
+          #       lambda: 'return (id(ropener_cover).current_operation != COVER_OPERATION_IDLE);' # Should evaluate to TRUE if moving
+          #     then:
+          #       - cover.stop: ropener_cover
+          #     else: ## If not moving, then close
+          #       - cover.close: ropener_cover
 
- - platform: gpio
-   name: Limit Switch 2
-   id: limit_switch_2
-   pin:
-     number: 3
-     mode: INPUT
-     inverted: true
-    # ...
-   on_press:
-     then:
-     - cover.stop: ropener_cover
+      # --- Double Click ---          
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at most 0.3s
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - cover.open: ropener_cover
 
+  - platform: gpio
+    name: Open Limit Switch
+    id: limit_switch_1
+    pin:
+      number: 15
+      mode: INPUT
+      inverted: true
+    interrupt_type: FALLING
+    filters: 
+      - delayed_on_off: 50ms   
+    on_press:
+      then:
+      - stepper.report_position:
+          id: driver
+          position: 0
+      - cover.stop: ropener_cover
 
+  - platform: gpio
+    name: Close Limit Switch
+    id: limit_switch_2
+    pin:
+      number: 3
+      mode: INPUT
+      inverted: true
+    interrupt_type: FALLING
+    # Optional: filters to prevent noise from triggering the sensor
+    filters:
+      - delayed_on_off: 50ms
+    on_press:
+      then:
+      - stepper.report_position:
+          id: driver
+          position: ${max_distance_steps}
+      - cover.stop: ropener_cover
 
 cover:
   - platform: template
@@ -136,28 +198,18 @@ cover:
     name: Ropener
     has_position: true
     assumed_state: false
-    lambda: "return 1.0 - (id(driver)->current_position / ${max_distance_steps});"
+    lambda: return 1.0 - (float(id(driver)->current_position) / float(371073));
     stop_action:
       - stepper.stop: driver
     open_action:
       - stepper.set_target:
           id: driver
           target: 0
-    open_endstop: limit_switch_1
     close_action:
       - stepper.set_target:
           id: driver
-          target: !lambda return ${max_distance_steps};
-    close_endstop: limit_switch_2
+          target: ${max_distance_steps}
     position_action:
       - stepper.set_target:
           id: driver
-          target: !lambda return (1.0 - pos) * ${max_distance_steps};
-          
-button:
-  - platform: template
-    name: Set Close Position
-    on_press:
-      - stepper.report_position:
-          id: driver
-          position: !lambda return ${max_distance_steps};
+          target: !lambda return (1.0 - pos) * float(371073);
