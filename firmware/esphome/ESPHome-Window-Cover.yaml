@@ -1,102 +1,110 @@
-# PDNUART: 0
-# TMC_TX: 1
-# LED BlUE: 2
-# LIMIT 2: 3
-# LED RED: 4
-# BUZZER: 5
-# INDEX: 6
-# DIAG: 14
-# TMC_EN: 8
-# Acceleromter Inerrupt: 12
-# LIMIT 1: 15
-# SDA: 19
-# SCL: 20
-# Button Calibration: 21
-# Button Move: 23
-
 external_components:
   - source: github://slimcdk/esphome-custom-components
     components: [tmc2209_hub, tmc2209, stepper]
 
-## 1.91666666667 revolutions to move 1mm
-## 121 mm travel distance
-
-# 1.9167 x 121 = 231.9207 revolutions to move full distance
-
 substitutions:
-  #stepper_direction: "cw" # change to "cw" or "ccw" to change direction
-
   steps_per_revolution: "1600"
   max_distance_revs: "float(231.9207)"
-
-  #max_distance_steps: "${max_distance_revs}*${steps_per_revolution}" # converts cm to steps. Use this in remaining code
-  max_distance_steps: 371073 # converts cm to steps. Use this in remaining code
+  max_distance_steps: 341387 # converts cm to steps. Use this in remaining code
 
 api:
+  encryption:
+    key: !secret api_key
 
 ota:
   - platform: esphome
 
 logger:
-  level: DEBUG
+  level: VERBOSE
+  hardware_uart: UART0
 
 esp32:
-  board: esp32-c6-devkitc-1
+  variant: esp32c6
   framework:
     type: esp-idf
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  on_connect:
+    then:
+      - logger.log: "Connected to WiFi! Running post-connect actions."
+      - if:      # NEED TO CHECK IF EITHER LIMIT SWITCH IS PRESSED AND SET POSITION BASED ON THAT
+          condition:
+            binary_sensor.is_on: limit_switch_1  # Check if switch is pressed
+          then:
+            - logger.log: "SETTING LIMIT 1"
+            - cover.template.publish:
+                id: glasscalibur_cover
+                position: 1.0
+            - stepper.report_position:
+                id: driver
+                position: ${max_distance_steps}
+            - stepper.set_target:
+                id: driver
+                target: ${max_distance_steps}
+
+      - if:
+          condition:
+            binary_sensor.is_on: limit_switch_2  # Check if switch is pressed
+          then:
+            - logger.log: "SETTING LIMIT 2"
+            - cover.template.publish:
+                id: glasscalibur_cover
+                position: 0
+            - stepper.report_position:
+                id: driver
+                position: 0
+            - stepper.set_target:
+                id: driver
+                target: 0
 
 esphome:
-  name: glasscalibur-kids-bedroom
+  name: "glasscalibur-1"
   on_boot:
-    priority: -100.0
-    then:
-    - delay: 1s
-    - logger.log:
-        format: "Button press detected."
-        tag: "my_custom_tag"
-    - tmc2209.configure:
-        direction: cw
-        microsteps: 8
-        interpolation: true
-    - tmc2209.stallguard:
-        threshold: 50
-    - tmc2209.currents:
-        standstill_mode: freewheeling
-        # 0-31
-        # 20 = 0.3A current
-        # 24 = 0.5A current
-        irun: 26 # 26 = 0.6A current. DO NOT EXCEED. MOTOR GETS STUPID HOT.
-        #run_current: 300m
-        ihold: 0
-        tpowerdown: 0
-        iholddelay: 0
-    - logger.log: "CHECKING LIMIT SWITCHES"
-    - if:      # NEED TO CHECK IF EITHER LIMIT SWITCH IS PRESSED AND SET POSITION BASED ON THAT
-        condition:
-          binary_sensor.is_on: limit_switch_1  # Check if switch is pressed
-        then:
-          - logger.log: "LIMIT 1"
-          - stepper.report_position:
-              id: driver
-              position: 371073
-    - if:
-        condition:
-          binary_sensor.is_on: limit_switch_2  # Check if switch is pressed
-        then:
-          - logger.log: "LIMIT 2"
-          - stepper.report_position:
-              id: driver
-              position: 0
+    # - priority: -100
+    #   then:
+      - logger.log: "CHECKING LIMIT SWITCHES"
+      - if:      # NEED TO CHECK IF EITHER LIMIT SWITCH IS PRESSED AND SET POSITION BASED ON THAT
+          condition:
+            binary_sensor.is_on: limit_switch_1  # Check if switch is pressed
+          then:
+            - logger.log: "SETTING LIMIT 1"
+            - stepper.report_position:
+                id: driver
+                position: ${max_distance_steps}
+            - stepper.set_target:
+                id: driver
+                target: ${max_distance_steps}
+      - if:
+          condition:
+            binary_sensor.is_on: limit_switch_2  # Check if switch is pressed
+          then:
+            - logger.log: "SETTING LIMIT 2"
+            - stepper.report_position:
+                id: driver
+                position: 0
+            - stepper.set_target:
+                id: driver
+                target: 0
 
-# then:
-#       - lambda: |-
-#           if (!id(limit_switch_1).state) {
-#             ESP_LOGI("boot", "Pin is HIGH");
-#           }
+      - tmc2209.configure:
+          direction: ccw
+          microsteps: 8
+          interpolation: true
+      - tmc2209.stallguard:
+          threshold: 50
+      - tmc2209.currents:
+          standstill_mode: freewheeling
+          irun: 25 # 26 = 0.6A current. DO NOT EXCEED. MOTOR GETS STUPID HOT.
+          ihold: 0
+          tpowerdown: 0
+          iholddelay: 0
+
+output:
+  - platform: ledc
+    pin: GPIO5
+    id: buzzer
 
 uart:
   tx_pin: 1
@@ -106,9 +114,9 @@ uart:
 stepper:
   - platform: tmc2209
     id: driver
-    #max_speed: 1500 steps/s # Faster speed is louder #2000 good. #1500 great
+    # max_speed: 1200 steps/s # Faster speed is louder #2000 good. #1500 great
     max_speed: 1200 steps/s # Faster speed is louder #2000 good. #1500 great
-    acceleration: 1000 steps/s^2
+    acceleration: 100 steps/s^2
     deceleration: 100000 steps/s^2 # Stop very fast in case limit swith reached
     config_dump_include_registers: true
     rsense: 220 mOhm
@@ -119,15 +127,12 @@ stepper:
     #on_stall:
       #- stepper.stop: driver
 
-# id(ropener_cover)->current_operation
-# COVER_OPERATION_IDLE, COVER_OPERATION_OPENING, COVER_OPERATION_CLOSING
-
 binary_sensor:
   - platform: gpio
     name: Button 1
     id: btn1
     pin:
-      number: 23
+      number: GPIO23
       mode: INPUT
       inverted: true
     filters:
@@ -139,14 +144,24 @@ binary_sensor:
           - ON for at most 1.0s
           - OFF for at least 0.5s
         then:
-          - cover.close: ropener_cover
+          - cover.close: glasscalibur_cover
           # - if:
           #     condition: ## If moving, then stop
-          #       lambda: 'return (id(ropener_cover).current_operation != COVER_OPERATION_IDLE);' # Should evaluate to TRUE if moving
+          #       lambda: return (id(glasscalibur_cover).current_operation != COVER_OPERATION_IDLE); # Should evaluate to TRUE if moving
           #     then:
-          #       - cover.stop: ropener_cover
+          #       - cover.stop: glasscalibur_cover
           #     else: ## If not moving, then close
-          #       - cover.close: ropener_cover
+          #       - cover.close: glasscalibur_cover
+
+          # - output.turn_on: buzzer
+          # - output.ledc.set_frequency:
+          #     id: buzzer
+          #     frequency: "2700Hz"
+          # - output.set_level:
+          #     id: buzzer
+          #     level: "50%"
+          # - delay: 1s
+          # - output.turn_off: buzzer
 
       # --- Double Click ---          
       - timing:
@@ -155,61 +170,130 @@ binary_sensor:
           - ON for at most 1.0s
           - OFF for at least 0.5s
         then:
-          - cover.open: ropener_cover
+          - cover.open: glasscalibur_cover
+
+          # - output.turn_on: buzzer
+          # - output.ledc.set_frequency:
+          #     id: buzzer
+          #     frequency: "2700Hz"
+          # - output.set_level:
+          #     id: buzzer
+          #     level: "50%"
+          # - delay: 1s
+          # - output.turn_off: buzzer
 
   - platform: gpio
     name: Open Limit Switch
     id: limit_switch_1
     pin:
-      number: 15
+      number: GPIO15
       mode: INPUT
       inverted: true
-    interrupt_type: FALLING
+    # Interrupts are not reliable, they constatnly miss. Use polling
+    use_interrupt: false
+    #interrupt_type: FALLING
     filters: 
-      - delayed_on_off: 50ms   
+      - delayed_on: 10ms   
     on_press:
       then:
+
       - stepper.report_position:
           id: driver
-          position: 0
-      - cover.stop: ropener_cover
+          position: ${max_distance_steps}
+      - stepper.set_target:
+          id: driver
+          target: ${max_distance_steps}
+
+      - cover.stop: glasscalibur_cover
+
+      - logger.log: "LIMIT 1 PRESSED"
+
+      # - cover.template.publish:
+      #     id: glasscalibur_cover
+      #     position: 1.0
+          
 
   - platform: gpio
     name: Close Limit Switch
     id: limit_switch_2
     pin:
-      number: 3
+      number: GPIO3
       mode: INPUT
       inverted: true
-    interrupt_type: FALLING
+    # Interrupts are not reliable, they constatnly miss. Use polling
+    use_interrupt: false
+    #interrupt_type: FALLING
     # Optional: filters to prevent noise from triggering the sensor
-    filters:
-      - delayed_on_off: 50ms
+    filters: 
+      - delayed_on: 10ms   
     on_press:
       then:
+
       - stepper.report_position:
           id: driver
-          position: ${max_distance_steps}
-      - cover.stop: ropener_cover
-
-cover:
-  - platform: template
-    id: ropener_cover
-    name: Ropener
-    has_position: true
-    assumed_state: false
-    lambda: return 1.0 - (float(id(driver)->current_position) / float(371073));
-    stop_action:
-      - stepper.stop: driver
-    open_action:
+          position: 0
       - stepper.set_target:
           id: driver
           target: 0
-    close_action:
+
+      - cover.stop: glasscalibur_cover
+
+      - logger.log: "LIMIT 2 PRESSED"
+      # - cover.template.publish:
+      #     id: glasscalibur_cover
+      #     position: 0
+
+cover:
+  - platform: template
+    id: glasscalibur_cover
+    name: Glasscalibur
+    has_position: true
+    lambda: "return (float(id(driver)->current_position) / float(${max_distance_steps}));"
+
+    stop_action:
+      - logger.log: "COVER stop_action"
+      - stepper.stop: driver
+
+    open_action:
+      - logger.log: "COVER open_action"
       - stepper.set_target:
           id: driver
           target: ${max_distance_steps}
-    position_action:
+      # Works to set current_operation but causes no movement and crash
+      # - cover.template.publish:
+      #     id: glasscalibur_cover
+      #     current_operation : OPENING
+      
+    close_action:
+      - logger.log: "COVER close_action"
       - stepper.set_target:
           id: driver
-          target: !lambda return (1.0 - pos) * float(371073);
+          target: 0
+
+    position_action:
+      - logger.log: "COVER position_action"
+      - stepper.set_target:
+          id: driver
+          target: !lambda return pos * ${max_distance_steps};
+
+    #These don't actually work. But they should   
+    # on_opening:
+    #   - logger.log: "COVER Opening"
+    #   - cover.template.publish:
+    #       id: glasscalibur_cover
+    #       current_operation : OPENING
+    # on_opened:
+    #   - logger.log: "COVER Open"
+    #   - cover.template.publish:
+    #       id: glasscalibur_cover
+    #       current_operation : IDLE
+    # on_closing:
+    #   - logger.log: "COVER Closing"
+    #   - cover.template.publish:
+    #       id: glasscalibur_cover
+    #       current_operation : CLOSING
+    # on_closed:
+    #   - logger.log: "COVER Closed"
+    #   - cover.template.publish:
+    #       id: glasscalibur_cover
+    #       current_operation : IDLE
