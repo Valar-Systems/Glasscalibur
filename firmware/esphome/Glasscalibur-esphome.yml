@@ -288,7 +288,13 @@ ota:
 # controller (USB-C data lines), independent of GPIO16/17. INFO for deployed
 # units; bump to DEBUG temporarily when tuning StallGuard or vib thresholds.
 logger:
-  level: INFO
+  level: DEBUG
+  logs:
+    # Silence the LIS2DH12 status-poll chatter (every accelerometer sample
+    # produces ~50 i2c.idf lines while it waits for DRDY). Bump these back
+    # to DEBUG if you actually need to debug I2C.
+    i2c.idf: INFO
+    lis2dh12: INFO
 
 # Browser-based control panel — open http://glasscalibur-XXXXXX.local in
 # any browser on the same network (where XXXXXX is the last 3 bytes of the
@@ -412,6 +418,13 @@ esphome:
           interpolation: true
           tcool_threshold: !lambda "return id(global_tcoolthrs);"
       - tmc2209.stallguard:
+          # SGTHRS stays at the user's chosen value regardless of the
+          # StallGuard Enabled switch — the chip always detects stalls;
+          # the on_stall handler below is what's gated by the switch.
+          # We avoid writing SGTHRS=0 because the stall condition
+          # SG_RESULT ≤ SGTHRS*2 can latch immediately at motion start
+          # (SG_RESULT is briefly 0 before it stabilizes), which would
+          # stop the motor before it ever gets going.
           threshold: !lambda "return id(global_sgthrs);"
       - tmc2209.currents:
           standstill_mode: freewheeling
@@ -472,18 +485,25 @@ stepper:
     index_pin: 6
     diag_pin: 14
     on_stall:
-      - stepper.stop: driver
-      - globals.set:
-          id: global_state
-          value: "0"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: IDLE
-      - globals.set:
-          id: global_current_position
-          value: !lambda "return id(driver)->current_position;"
-      - lambda: 'id(stallguard_count) += 1;'
-      - logger.log: "MOTOR STALLED!!!"
+      # Software gate on the "StallGuard Enabled" switch — the chip itself
+      # always flags stalls; we only react when the user has opted in. When
+      # the switch is off, the trigger fires harmlessly with no effect.
+      - if:
+          condition:
+            lambda: 'return id(stallguard_enabled).state;'
+          then:
+            - stepper.stop: driver
+            - globals.set:
+                id: global_state
+                value: "0"
+            - cover.template.publish:
+                id: glasscalibur_cover
+                current_operation: IDLE
+            - globals.set:
+                id: global_current_position
+                value: !lambda "return id(driver)->current_position;"
+            - lambda: 'id(stallguard_count) += 1;'
+            - logger.log: "MOTOR STALLED!!!"
 
 # -----------------------------------------------------------------------------
 # Physical buttons + end-stop limit switches
@@ -756,27 +776,13 @@ cover:
           id: driver
           target: !lambda return pos * ${max_distance_steps};
 
-    #These don't actually work. But they should   
-    on_opening:
-      - logger.log: "COVER Opening"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation : OPENING
-    on_opened:
-      - logger.log: "COVER Open"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation : IDLE
-    on_closing:
-      - logger.log: "COVER Closing"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation : CLOSING
-    on_closed:
-      - logger.log: "COVER Closed"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation : IDLE
+    # NOTE: on_opening / on_opened / on_closing / on_closed used to be wired
+    # here, each re-publishing the same current_operation they fired on. That
+    # made the trigger recurse into itself indefinitely and stack-overflow
+    # within milliseconds of a cover.open / cover.close. The open_action /
+    # close_action / position_action / stop_action above already publish
+    # OPENING / CLOSING / IDLE, and the 200 ms motion-completion poll flips
+    # back to IDLE on target arrival, so these handlers are not needed at all.
 
 # -----------------------------------------------------------------------------
 # Tunable number entities
@@ -912,7 +918,10 @@ number:
     restore_value: true
     initial_value: 5
 
-# SET SGTHRS
+# SET SGTHRS — always written to the chip. The "StallGuard Enabled" switch
+# gates only the software on_stall handler, not the chip's SGTHRS register,
+# so SG_RESULT and the DIAG output stay live for tuning even when the handler
+# is muted.
   - platform: template
     name: SGTHRS
     step: 1
@@ -920,9 +929,9 @@ number:
     max_value: 255
     mode: SLIDER
     entity_category: CONFIG
-    lambda: return id(driver)->read_register(SGTHRS);
+    lambda: return id(global_sgthrs);
     update_interval: 1s
-    set_action: 
+    set_action:
       then:
         - globals.set:
             id: global_sgthrs
@@ -1004,6 +1013,24 @@ switch:
           id: vib_loud_count
           value: "0"
       - logger.log: "Vibration stall detection disabled"
+
+  # Master enable for the TMC2209 StallGuard *handler*. The chip's SGTHRS is
+  # always set to the user's chosen value (via the SGTHRS number entity), so
+  # the chip detects stalls regardless of this switch. The on_stall handler
+  # on the stepper is what's gated by this switch — when OFF, stall events
+  # fire but are ignored, so a misconfigured threshold can't spuriously stop
+  # the motor. Defaults OFF because SGTHRS needs per-installation tuning
+  # before stall response can be trusted.
+  - platform: template
+    name: "StallGuard Enabled"
+    id: stallguard_enabled
+    entity_category: CONFIG
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.log: "StallGuard handler enabled"
+    turn_off_action:
+      - logger.log: "StallGuard handler disabled"
 
 # -----------------------------------------------------------------------------
 # Anti-tamper calibration / acknowledgement
@@ -1172,12 +1199,12 @@ i2c:
 # 3-axis MEMS accelerometer on the PCB. Used for two things:
 #   1. Anti-tamper detection (checks orientation while IDLE).
 #   2. Vibration-based stall detection (backstops StallGuard).
-# Default I2C address is 0x19 (SA0 pulled high). If the boot log's i2c scan
-# shows 0x18 instead, set `address: 0x18` here.
+# SA0 is grounded on this board, so the I2C address is 0x18 (would be 0x19
+# if SA0 were pulled to VDD).
 lis2dh12_i2c:
   id: accelerometer
   i2c_id: i2c_bus
-  address: 0x19
+  address: 0x18
   range: 4G                  # ±4g — plenty for orientation + motor vibration
   resolution: high           # 12-bit reads
   output_data_rate: 100Hz    # chip samples 100x/sec
