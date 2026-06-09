@@ -1,0 +1,263 @@
+# =============================================================================
+# Glasscalibur — HARDWARE TEST firmware (no Wi-Fi)
+# =============================================================================
+#
+# Bare-minimum ESPHome config for bringing up a fresh PCB. No Wi-Fi, no API,
+# no web UI, no OTA — flash over USB, watch the USB-Serial-JTAG log, and
+# interact with the device entirely through the physical inputs.
+#
+# What this build verifies:
+#   * Boots on ESP32-C6-MINI-1, esp-idf framework
+#   * USB-Serial-JTAG console logs at INFO
+#   * Buzzer chirps on boot so you know the build is alive
+#   * I2C bus scans on boot (look for 0x18 LIS2DH12, 0x49 TMP1075)
+#   * TMC2209 stepper responds to Button 1
+#   * Accelerometer X/Y/Z + motor temperature logged once per second
+#
+# Physical inputs (all log + act, no UI required):
+#   * Button 1 (GPIO23):
+#       - single click  -> close cover (motor runs toward 0)
+#       - double click  -> open cover  (motor runs toward max)
+#   * GPIO21 (formerly "WiFi Reset", repurposed here):
+#       - short press   -> buzzer test (1 s @ 2700 Hz)
+#   * Open / Close limit switches: log + stop the motor on press
+#
+# Once everything checks out, swap back to the full YAML to enable Wi-Fi.
+# =============================================================================
+
+external_components:
+  - source: github://slimcdk/esphome-custom-components
+    components: [tmc2209_hub, tmc2209, stepper]
+  - source: github://latonita/esphome@27474828624fd0224683041c182e191eedf52032
+    components: [lis2dh12_base, lis2dh12_i2c]
+
+substitutions:
+  max_distance_steps: "341387"
+
+esphome:
+  name: glasscalibur-test
+  friendly_name: "Glasscalibur (test)"
+  on_boot:
+    - tmc2209.configure:
+        direction: ccw
+        microsteps: 8
+        interpolation: true
+    - tmc2209.currents:
+        standstill_mode: freewheeling
+        irun: 20
+        ihold: 0
+    # Audible "I'm alive" chirp so you don't have to watch the log to know
+    # the board finished booting.
+    - output.turn_on: buzzer
+    - output.ledc.set_frequency:
+        id: buzzer
+        frequency: "2700Hz"
+    - output.set_level:
+        id: buzzer
+        level: "50%"
+    - delay: 150ms
+    - output.turn_off: buzzer
+
+esp32:
+  variant: esp32c6
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+  logs:
+    i2c.idf: INFO
+    lis2dh12: INFO
+
+# -----------------------------------------------------------------------------
+# Buzzer
+# -----------------------------------------------------------------------------
+output:
+  - platform: ledc
+    pin: GPIO5
+    id: buzzer
+
+# -----------------------------------------------------------------------------
+# UART to TMC2209
+# -----------------------------------------------------------------------------
+uart:
+  tx_pin: 1
+  rx_pin: 0
+  baud_rate: 500000
+
+# -----------------------------------------------------------------------------
+# Stepper driver — minimal; on_stall just logs
+# -----------------------------------------------------------------------------
+stepper:
+  - platform: tmc2209
+    id: driver
+    max_speed: 1200 steps/s
+    acceleration: 500 steps/s^2
+    deceleration: inf
+    config_dump_include_registers: false
+    rsense: 220 mOhm
+    vsense: False
+    enn_pin: 8
+    index_pin: 6
+    diag_pin: 14
+    on_stall:
+      - logger.log: "on_stall fired (test build — ignoring)"
+
+# -----------------------------------------------------------------------------
+# I2C bus — scan: true prints all detected addresses on boot
+# -----------------------------------------------------------------------------
+i2c:
+  sda: GPIO19
+  scl: GPIO20
+  scan: true
+  id: i2c_bus
+
+# -----------------------------------------------------------------------------
+# LIS2DH12 accelerometer (SA0 grounded -> 0x18)
+# -----------------------------------------------------------------------------
+lis2dh12_i2c:
+  id: accelerometer
+  i2c_id: i2c_bus
+  address: 0x18
+  range: 4G
+  resolution: high
+  output_data_rate: 100Hz
+  update_interval: 1s
+
+# -----------------------------------------------------------------------------
+# Binary sensors — Button 1, limit switches, GPIO21 (buzzer test)
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    name: "Button 1"
+    id: btn1
+    pin:
+      number: GPIO23
+      mode: INPUT
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+    on_multi_click:
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - logger.log: "Button 1: single click -> close"
+          - stepper.set_target:
+              id: driver
+              target: 0
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at most 0.3s
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - logger.log: "Button 1: double click -> open"
+          - stepper.set_target:
+              id: driver
+              target: ${max_distance_steps}
+
+  - platform: gpio
+    name: "Open Limit Switch"
+    id: limit_switch_1
+    pin:
+      number: GPIO15
+      mode: INPUT
+      inverted: true
+    use_interrupt: false
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      - logger.log: "OPEN LIMIT pressed"
+      - stepper.report_position:
+          id: driver
+          position: ${max_distance_steps}
+      - stepper.set_target:
+          id: driver
+          target: ${max_distance_steps}
+
+  - platform: gpio
+    name: "Close Limit Switch"
+    id: limit_switch_2
+    pin:
+      number: GPIO3
+      mode: INPUT
+      inverted: true
+    use_interrupt: false
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      - logger.log: "CLOSE LIMIT pressed"
+      - stepper.report_position:
+          id: driver
+          position: 0
+      - stepper.set_target:
+          id: driver
+          target: 0
+
+  # GPIO21 repurposed as a buzzer test button while Wi-Fi is disabled.
+  - platform: gpio
+    name: "Buzzer Test"
+    id: btn_buzzer_test
+    pin:
+      number: GPIO21
+      mode: INPUT
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      - logger.log: "Buzzer test: 1 s @ 2700 Hz"
+      - output.turn_on: buzzer
+      - output.ledc.set_frequency:
+          id: buzzer
+          frequency: "2700Hz"
+      - output.set_level:
+          id: buzzer
+          level: "50%"
+      - delay: 1s
+      - output.turn_off: buzzer
+
+# -----------------------------------------------------------------------------
+# Sensors — accel, motor temperature
+# -----------------------------------------------------------------------------
+sensor:
+  - platform: lis2dh12_base
+    lis2dh12_id: accelerometer
+    acceleration_x:
+      name: "Accel X"
+      id: accel_x
+    acceleration_y:
+      name: "Accel Y"
+      id: accel_y
+    acceleration_z:
+      name: "Accel Z"
+      id: accel_z
+
+  - platform: tmp1075
+    name: "Motor Temperature"
+    id: motor_temp
+    update_interval: 3s
+    i2c_id: i2c_bus
+    address: 0x49
+    accuracy_decimals: 2
+
+  - platform: internal_temperature
+    name: "ESP Internal Temperature"
+    update_interval: 60s
+
+# -----------------------------------------------------------------------------
+# Periodic log line — prints accel + motor temp once per second so you don't
+# have to enable DEBUG to watch the sensors live.
+# -----------------------------------------------------------------------------
+interval:
+  - interval: 1s
+    then:
+      - logger.log:
+          format: "accel: x=%+.3f y=%+.3f z=%+.3f g | motor: %.2f C | stepper: %d/%d"
+          args:
+            - 'id(accel_x).state'
+            - 'id(accel_y).state'
+            - 'id(accel_z).state'
+            - 'id(motor_temp).state'
+            - 'id(driver)->current_position'
+            - 'id(driver)->target_position'

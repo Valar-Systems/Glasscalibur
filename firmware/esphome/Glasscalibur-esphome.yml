@@ -31,7 +31,7 @@
 #   GPIO8  : ENN       (TMC2209 enable, active low)
 #   GPIO14 : DIAG      (TMC2209 StallGuard / fault output -> on_stall)
 #   GPIO15 : Open-end limit switch (active low, polled)
-#   GPIO17 : Wi-Fi Reset button (active low; hold 3-10 s to clear creds)
+#   GPIO21 : Wi-Fi Reset button (active low; hold 3-10 s to clear creds)
 #   GPIO19 : I2C SDA
 #   GPIO20 : I2C SCL
 #   GPIO23 : Button 1 (active low; single/double click)
@@ -74,7 +74,7 @@
 #                       OPENING/CLOSING -> stop motor
 #                       IDLE            -> close the cover
 #     - Double click  : open the cover
-#   WiFi Reset (GPIO17):
+#   WiFi Reset (GPIO21):
 #     - Hold 3-10 s   : clear saved Wi-Fi credentials and reboot into setup
 #
 # -----------------------------------------------------------------------------
@@ -117,7 +117,7 @@
 # Wi-Fi provisioning (no secrets required)
 # -----------------------------------------------------------------------------
 #   This firmware ships without hardcoded Wi-Fi credentials. On a fresh flash
-#   (or after a Wi-Fi reset via the GPIO17 button), the device broadcasts a
+#   (or after a Wi-Fi reset via the GPIO21 button), the device broadcasts a
 #   "glasscalibur-XXXXXX" hotspot and the captive portal prompts for your
 #   network. Improv over USB-Serial-JTAG also works (e.g. web.esphome.io).
 #   Credentials are saved to flash and survive reboots and OTA updates.
@@ -514,7 +514,7 @@ stepper:
 #   absolute position to the stepper (correcting drift), stop the cover, and
 #   inherit IDLE-state cleanup through stop_action. Both are polled rather
 #   than interrupt-driven because polling proved more reliable in testing.
-# WiFi Reset (GPIO17): long press wipes saved credentials and reboots into
+# WiFi Reset (GPIO21): long press wipes saved credentials and reboots into
 #   captive-portal setup mode.
 # Tamper / accel-interrupt sensors live at the end of this block.
 binary_sensor:
@@ -656,7 +656,7 @@ binary_sensor:
       #     id: glasscalibur_cover
       #     position: 0
 
-  # WiFi Reset (GPIO17): hold 3-10 s to erase saved Wi-Fi credentials and
+  # WiFi Reset (GPIO21): hold 3-10 s to erase saved Wi-Fi credentials and
   # reboot into setup mode. A long hold is required (not a quick tap) so the
   # device can't be knocked offline by an accidental press. On reboot the
   # device re-runs Wi-Fi setup: with no credentials saved (and none compiled
@@ -667,7 +667,7 @@ binary_sensor:
     name: WiFi Reset
     id: btn_wifi_reset
     pin:
-      number: GPIO17
+      number: GPIO21
       mode: INPUT
       inverted: true
     filters:
