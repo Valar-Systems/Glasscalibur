@@ -234,10 +234,21 @@ globals:
 
   # --- Vibration-based stall (secondary to StallGuard) ---
   # A stalled stepper shakes the device hard. While the motor is commanded to
-  # move, we count consecutive samples whose vibration amplitude exceeds
-  # vib_threshold; crossing vib_stall_samples ticks declares a stall.
+  # move, we run a leaky counter on vibration-above-threshold samples; crossing
+  # vib_stall_samples declares a stall. Leaky (rather than consecutive-reset)
+  # so a single quiet sample mid-stall doesn't restart the count from zero.
   - id: vib_loud_count
     type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Timestamp (millis()) at which the current motion command started. Used by
+  # the vib-stall check to skip its first ~500 ms after launch — initial motor
+  # torque can spike the accelerometer hard enough to false-trip before the
+  # mechanism reaches steady-state. Set in open_action / close_action /
+  # position_action; not persisted (only meaningful while motion is active).
+  - id: motion_start_ms
+    type: uint32_t
     restore_value: no
     initial_value: '0'
 
@@ -730,6 +741,7 @@ cover:
 
     open_action:
       - logger.log: "COVER open_action"
+      - lambda: 'id(motion_start_ms) = millis();'
       - globals.set:
           id: global_state
           value: "1"
@@ -742,6 +754,7 @@ cover:
 
     close_action:
       - logger.log: "COVER close_action"
+      - lambda: 'id(motion_start_ms) = millis();'
       - globals.set:
           id: global_state
           value: "2"
@@ -754,6 +767,7 @@ cover:
 
     position_action:
       - logger.log: "COVER position_action"
+      - lambda: 'id(motion_start_ms) = millis();'
       # Direction is inferred by comparing the new target to current_position.
       - if:
           condition:
@@ -1208,7 +1222,12 @@ lis2dh12_i2c:
   range: 4G                  # ±4g — plenty for orientation + motor vibration
   resolution: high           # 12-bit reads
   output_data_rate: 100Hz    # chip samples 100x/sec
-  update_interval: 200ms     # ESPHome reads chip 5x/sec, fast enough for vib check
+  # 500 ms keeps the draft PR's status-poll cost manageable (its sync DRDY
+  # loop is what triggers "took a long time" warnings). The 1 s tamper check
+  # and 200 ms vib-stall check read the cached value, so vib detection latency
+  # is bounded by this — ~2.5 s worst case at the default 5-sample threshold,
+  # acceptable for a window cover. Tighten if you want snappier stall reaction.
+  update_interval: 500ms
 
 # -----------------------------------------------------------------------------
 # Diagnostic / live sensors
@@ -1442,18 +1461,23 @@ interval:
       - if:
           condition:
             lambda: |-
+              // Skip the first 500 ms after motion launch — initial torque
+              // spikes can read like a stall before the mechanism settles.
               return id(vib_enabled).state &&
-                     (id(global_state) == 1 || id(global_state) == 2);
+                     (id(global_state) == 1 || id(global_state) == 2) &&
+                     (millis() - id(motion_start_ms)) >= 500;
           then:
             - lambda: |-
                 float mag = sqrtf(id(accel_x).state * id(accel_x).state +
                                   id(accel_y).state * id(accel_y).state +
                                   id(accel_z).state * id(accel_z).state);
                 float vibration = fabsf(mag - 1.0f);
+                // Leaky counter: +1 on loud, -1 on quiet (floored at 0). A
+                // single quiet sample mid-stall doesn't restart the count.
                 if (vibration > id(vib_threshold).state) {
                   id(vib_loud_count) += 1;
-                } else {
-                  id(vib_loud_count) = 0;
+                } else if (id(vib_loud_count) > 0) {
+                  id(vib_loud_count) -= 1;
                 }
             - if:
                 condition:
