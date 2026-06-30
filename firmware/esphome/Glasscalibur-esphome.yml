@@ -148,16 +148,14 @@
 # External components.
 # - slimcdk: TMC2209 driver + custom stepper component with on_stall trigger,
 #   StallGuard configuration, register-level UART access.
-# - latonita: LIS2DH12 accelerometer support (draft PR; pinned to a SHA so a
-#   force-push can't silently change the schema under us).
+# - valar-systems: Valar fork of latonita's draft LIS2DH12 PR (esphome#14788)
+#   with four fixes — stale-sample guard, throttled loop() reads, optional
+#   data-ready interrupt pin, and on-chip high-pass filter support.
 external_components:
   - source: github://slimcdk/esphome-custom-components
     components: [tmc2209_hub, tmc2209, stepper]
 
-  # LIS2DH12 accelerometer support — pulled from latonita's draft PR
-  # (esphome#14788). Pinned to a specific commit so a future force-push
-  # doesn't silently break the build. Bump the @sha when the PR updates.
-  - source: github://latonita/esphome@27474828624fd0224683041c182e191eedf52032
+  - source: github://Valar-Systems/esphome-lis2dh12
     components: [lis2dh12_base, lis2dh12_i2c]
 
 globals:
@@ -270,6 +268,45 @@ globals:
     restore_value: yes
     initial_value: '0'
 
+  # --- Sunrise/sunset schedule (persisted) ---
+  # Geographic location for the optional sun schedule, in decimal degrees
+  # (north and east positive). Persisted and browser-editable via the
+  # "Latitude"/"Longitude" numbers; pushed into the sun component on change and
+  # on boot. Default 0,0 — set your real coordinates for the sun schedule to be
+  # meaningful.
+  - id: global_latitude
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: global_longitude
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+
+  # Minute offsets applied to the sun events: the cover opens at
+  # sunrise + open_offset and closes at sunset + close_offset. Signed, so a
+  # negative value fires before the event (e.g. "close 30 min before sunset" is
+  # a close offset of -30). Persisted and browser-editable.
+  - id: global_sun_open_offset
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: global_sun_close_offset
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+  # Last daylight state the sun scheduler drove the cover to (1 = open/day,
+  # 0 = closed/night, -1 = not yet evaluated). The scheduler only issues a move
+  # when this changes, so it acts once per sunrise/sunset transition (and
+  # reconciles to the correct state on boot) without repeatedly fighting manual
+  # control. Reset to -1 whenever the schedule inputs change. Not persisted:
+  # every boot re-evaluates from the current time.
+  - id: global_sun_last_desired
+    type: int
+    restore_value: no
+    initial_value: '-1'
+
 # -----------------------------------------------------------------------------
 # Mechanical constants
 # -----------------------------------------------------------------------------
@@ -284,6 +321,19 @@ substitutions:
   max_distance_revs:   "213.3669" # informational only; = max_distance_steps / steps_per_revolution
   max_distance_steps:  "341387"
 
+  # Firmware version — single source of truth. Feeds project.version (so Home
+  # Assistant / the ESPHome dashboard report the running build) and the
+  # "Firmware Version" diagnostic sensor shown on the web UI. Bump this on every
+  # released change, then publish a matching GitHub release (see ota_asset).
+  firmware_version: "1.1.0"
+
+  # Base name of the OTA asset uploaded to each GitHub release. The "Update
+  # Firmware (GitHub)" button downloads
+  #   https://github.com/Valar-Systems/Glasscalibur/releases/latest/download/${ota_asset}.ota.bin
+  # (and the matching .ota.bin.md5). Keep the uploaded asset names stable
+  # (version-less) so this "latest" URL never changes between releases.
+  ota_asset: "Glasscalibur"
+
 # Native ESPHome API — works without Home Assistant. Encryption removed so the
 # build doesn't require secrets.yaml. To pair with HA without the "Communication
 # not encrypted" warning, add:
@@ -291,9 +341,24 @@ substitutions:
 #     key: !secret api_key
 api:
 
-# Over-the-air firmware updates via the ESPHome dashboard.
+# Over-the-air firmware updates. The `esphome` platform handles uploads from the
+# ESPHome dashboard / CLI; the `http_request` platform powers the "Update
+# Firmware (GitHub)" button, which pulls the latest released binary from GitHub.
 ota:
   - platform: esphome
+  - platform: http_request
+
+# HTTP client used by the GitHub OTA button. verify_ssl is off so we don't have
+# to bundle and refresh a CA certificate; the tradeoff is no certificate
+# verification on the download. The timeout is generous (the image is ~1 MB).
+# The buffers are enlarged from the 512-byte default: GitHub 302-redirects the
+# download to a very long signed CDN URL, and the request/response don't fit in
+# 512 bytes (the esp_http_client reports "Out of buffer" and the OTA fails).
+http_request:
+  verify_ssl: false
+  timeout: 10min
+  buffer_size_rx: 4096
+  buffer_size_tx: 4096
 
 # Logger console comes through the ESP32-C6's built-in USB-Serial-JTAG
 # controller (USB-C data lines), independent of GPIO16/17. INFO for deployed
@@ -311,8 +376,34 @@ logger:
 # any browser on the same network (where XXXXXX is the last 3 bytes of the
 # device's MAC, printed on the serial log at boot). Exposes all entities
 # (cover, buttons, sliders, switches, sensors) without requiring Home Assistant.
+#
+# version: 3 enables the grouped UI: instead of one alphabetical list, entities
+# are placed into the labeled, collapsible groups defined below. Each entity
+# sets `web_server: { sorting_weight, sorting_group_id }` to choose its group
+# and position within it; the groups themselves are ordered by their own
+# sorting_weight (lower = higher on the page).
 web_server:
   port: 80
+  version: 3
+  sorting_groups:
+    - id: group_control
+      name: "Control"
+      sorting_weight: 10
+    - id: group_motion
+      name: "Motion Tuning"
+      sorting_weight: 20
+    - id: group_stallguard
+      name: "StallGuard / Stall Detection"
+      sorting_weight: 30
+    - id: group_security
+      name: "Security / Tamper"
+      sorting_weight: 40
+    - id: group_schedule
+      name: "Schedule"
+      sorting_weight: 50
+    - id: group_diagnostics
+      name: "Diagnostics"
+      sorting_weight: 60
 
 # -----------------------------------------------------------------------------
 # Board / framework
@@ -363,6 +454,21 @@ time:
     timezone: "UTC0"
 
 # -----------------------------------------------------------------------------
+# Sun position (drives the optional sunrise/sunset schedule)
+# -----------------------------------------------------------------------------
+# Computes local sunrise/sunset from the device's latitude/longitude and the
+# SNTP clock above. The lat/long literals here are placeholders (0,0 — "null
+# island"); the real location is pushed in at runtime from the browser-editable
+# "Latitude"/"Longitude" numbers (and re-applied in on_boot), so no reflash is
+# needed to set your location. Consumed by the sun-schedule interval further
+# down when "Sun Schedule" is enabled. The time source is auto-resolved to the
+# single `time:` component above.
+sun:
+  id: sun_sun
+  latitude: 0°
+  longitude: 0°
+
+# -----------------------------------------------------------------------------
 # Device identity + boot-time motor configuration
 # -----------------------------------------------------------------------------
 # on_boot:
@@ -380,7 +486,7 @@ esphome:
   # tell which build is running. Bump `version` on every released change.
   project:
     name: "valar-systems.glasscalibur"
-    version: "1.0.0"
+    version: "${firmware_version}"
   on_boot:
     # - priority: -100
     #   then:
@@ -450,6 +556,16 @@ esphome:
           // value does not re-fire its set_action, so push it into the clock
           // here on boot.
           id(sntp_time)->set_timezone(id(tz_text)->state);
+      - lambda: |-
+          // Same story for the saved location: the Latitude/Longitude numbers
+          // restore their values but don't re-fire their set_action, so push
+          // them into the sun component here so sunrise/sunset are computed for
+          // the right place after a reboot.
+          id(sun_sun)->set_latitude(id(global_latitude));
+          id(sun_sun)->set_longitude(id(global_longitude));
+      - text_sensor.template.publish:        # surface the firmware version on the web UI / HA
+          id: firmware_version_text
+          state: "${firmware_version}"
 
 # -----------------------------------------------------------------------------
 # Buzzer (passive piezo on GPIO5, driven by ledc PWM)
@@ -532,6 +648,9 @@ binary_sensor:
   - platform: gpio
     name: Button 1
     id: btn1
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_control
     pin:
       number: GPIO23
       mode: INPUT
@@ -609,6 +728,9 @@ binary_sensor:
   - platform: gpio
     name: Open Limit Switch
     id: limit_switch_1
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_diagnostics
     pin:
       number: GPIO15
       mode: INPUT
@@ -640,6 +762,9 @@ binary_sensor:
   - platform: gpio
     name: Close Limit Switch
     id: limit_switch_2
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_diagnostics
     pin:
       number: GPIO3
       mode: INPUT
@@ -677,6 +802,9 @@ binary_sensor:
   - platform: gpio
     name: WiFi Reset
     id: btn_wifi_reset
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_diagnostics
     pin:
       number: GPIO21
       mode: INPUT
@@ -702,6 +830,9 @@ binary_sensor:
     name: "Tamper Detected"
     id: tamper_sensor
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_security
     lambda: 'return id(tamper_detected);'
 
 # -----------------------------------------------------------------------------
@@ -723,6 +854,9 @@ cover:
   - platform: template
     id: glasscalibur_cover
     name: Glasscalibur
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_control
     has_position: true
     lambda: "return (float(id(driver)->current_position) / float(${max_distance_steps}));"
 
@@ -810,6 +944,9 @@ number:
 # SET acceleration
   - platform: template
     name: acceleration
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_motion
     step: 100
     min_value: 100
     max_value: 10000
@@ -829,6 +966,9 @@ number:
 # SET max_speed
   - platform: template
     name: max_speed
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_motion
     step: 100
     min_value: 100
     max_value: 10000
@@ -848,6 +988,9 @@ number:
 # SET irun
   - platform: template
     name: irun
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_motion
     step: 1
     min_value: 1
     max_value: 31
@@ -866,6 +1009,9 @@ number:
 # SET TCOOL
   - platform: template
     name: TCOOLTHRS
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_stallguard
     step: 1
     min_value: 0
     max_value: 1048575
@@ -888,6 +1034,9 @@ number:
   - platform: template
     name: "Tamper Threshold"
     id: tamper_threshold
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_security
     step: 0.05
     min_value: 0.05
     max_value: 2.0
@@ -906,6 +1055,9 @@ number:
   - platform: template
     name: "Vibration Threshold"
     id: vib_threshold
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_stallguard
     step: 0.05
     min_value: 0.05
     max_value: 4.0
@@ -923,6 +1075,9 @@ number:
   - platform: template
     name: "Vibration Stall Samples"
     id: vib_stall_samples
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_stallguard
     step: 1
     min_value: 2
     max_value: 60
@@ -943,6 +1098,9 @@ number:
     max_value: 255
     mode: SLIDER
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_stallguard
     lambda: return id(global_sgthrs);
     update_interval: 1s
     set_action:
@@ -951,6 +1109,102 @@ number:
             id: global_sgthrs
             value: !lambda "return x;"
         - lambda: id(driver)->write_register(SGTHRS, x);
+
+  # ---- Sun-schedule location & offsets ----------------------------------------
+  # Latitude / Longitude in decimal degrees (north & east positive). Used only
+  # by the sun schedule. Pushed into the sun component on change (and on boot);
+  # changing either also resets the scheduler so it re-evaluates immediately.
+  # Set these to your location for sunrise/sunset to be accurate.
+  - platform: template
+    name: "Latitude"
+    web_server:
+      sorting_weight: 7
+      sorting_group_id: group_schedule
+    step: 0.0001
+    min_value: -90
+    max_value: 90
+    mode: BOX
+    entity_category: CONFIG
+    lambda: return id(global_latitude);
+    update_interval: 30s
+    set_action:
+      then:
+        - globals.set:
+            id: global_latitude
+            value: !lambda "return x;"
+        - lambda: id(sun_sun)->set_latitude(x);
+        - globals.set:
+            id: global_sun_last_desired
+            value: "-1"
+
+  - platform: template
+    name: "Longitude"
+    web_server:
+      sorting_weight: 8
+      sorting_group_id: group_schedule
+    step: 0.0001
+    min_value: -180
+    max_value: 180
+    mode: BOX
+    entity_category: CONFIG
+    lambda: return id(global_longitude);
+    update_interval: 30s
+    set_action:
+      then:
+        - globals.set:
+            id: global_longitude
+            value: !lambda "return x;"
+        - lambda: id(sun_sun)->set_longitude(x);
+        - globals.set:
+            id: global_sun_last_desired
+            value: "-1"
+
+  # Minute offsets for the sun schedule. Open fires at sunrise + open offset,
+  # close at sunset + close offset. Negative = before the event (e.g. set the
+  # close offset to -30 to close 30 minutes before sunset).
+  - platform: template
+    name: "Sun Open Offset"
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_schedule
+    unit_of_measurement: "min"
+    step: 1
+    min_value: -180
+    max_value: 180
+    mode: BOX
+    entity_category: CONFIG
+    lambda: return id(global_sun_open_offset);
+    update_interval: 30s
+    set_action:
+      then:
+        - globals.set:
+            id: global_sun_open_offset
+            value: !lambda "return x;"
+        - globals.set:
+            id: global_sun_last_desired
+            value: "-1"
+
+  - platform: template
+    name: "Sun Close Offset"
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_schedule
+    unit_of_measurement: "min"
+    step: 1
+    min_value: -180
+    max_value: 180
+    mode: BOX
+    entity_category: CONFIG
+    lambda: return id(global_sun_close_offset);
+    update_interval: 30s
+    set_action:
+      then:
+        - globals.set:
+            id: global_sun_close_offset
+            value: !lambda "return x;"
+        - globals.set:
+            id: global_sun_last_desired
+            value: "-1"
 
 # -----------------------------------------------------------------------------
 # Schedule controls
@@ -964,8 +1218,34 @@ switch:
     name: "Schedule Enabled"
     id: schedule_enabled
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_schedule
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
+
+  # Sun Schedule: picks WHICH schedule the master "Schedule Enabled" runs.
+  #   OFF -> fixed "Open Time"/"Close Time" pickers (default)
+  #   ON  -> sunrise/sunset: open at sunrise + "Sun Open Offset" and close at
+  #          sunset + "Sun Close Offset" (see those numbers and the sun-schedule
+  #          interval). The fixed on_time triggers are suppressed while this is
+  #          ON, so only one schedule is ever active at a time.
+  # Master "Schedule Enabled" must still be ON for either schedule to run.
+  # Resets the scheduler's cached daylight state on enable so it reconciles the
+  # cover to the current sun position immediately rather than at the next event.
+  - platform: template
+    name: "Sun Schedule"
+    id: sun_schedule_enabled
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_schedule
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - globals.set:
+          id: global_sun_last_desired
+          value: "-1"
 
   # Master enable for tamper detection. When OFF the 1 s tamper-check interval
   # is skipped entirely. Turning OFF also silences any active alarm and clears
@@ -977,6 +1257,9 @@ switch:
     name: "Tamper Detection"
     id: tamper_enabled
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_security
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     turn_on_action:
@@ -1020,6 +1303,9 @@ switch:
     name: "Vibration Stall Detection"
     id: vib_enabled
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_stallguard
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     turn_off_action:
@@ -1039,6 +1325,9 @@ switch:
     name: "StallGuard Enabled"
     id: stallguard_enabled
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_stallguard
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     turn_on_action:
@@ -1059,6 +1348,9 @@ button:
   - platform: template
     name: "Set Tamper Baseline"
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_security
     on_press:
       - globals.set:
           id: tamper_baseline_x
@@ -1088,6 +1380,9 @@ button:
   - platform: template
     name: "Clear Tamper Alert"
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_security
     on_press:
       - script.stop: tamper_alarm
       - output.turn_off: buzzer
@@ -1107,6 +1402,9 @@ button:
   - platform: template
     name: "Reset StallGuard Trips"
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 14
+      sorting_group_id: group_diagnostics
     on_press:
       - globals.set:
           id: stallguard_count
@@ -1116,6 +1414,9 @@ button:
   - platform: template
     name: "Reset Vibration Stall Trips"
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 15
+      sorting_group_id: group_diagnostics
     on_press:
       - globals.set:
           id: vib_stall_count
@@ -1125,11 +1426,45 @@ button:
   - platform: template
     name: "Reset Tamper Trips"
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 16
+      sorting_group_id: group_diagnostics
     on_press:
       - globals.set:
           id: tamper_count
           value: "0"
       - logger.log: "Tamper trip counter reset"
+
+  # Pull the latest released firmware straight from GitHub and flash it over the
+  # air. Points at the version-less "latest" asset so the URL never changes
+  # between releases; the device downloads, flashes, and reboots. Requires an
+  # internet connection AND a published GitHub release that includes
+  # ${ota_asset}.ota.bin and its .md5 (see the release-publishing note in the
+  # firmware README). Until that release exists the button will log a download
+  # error and leave the running firmware untouched.
+  - platform: template
+    name: "Update Firmware (GitHub)"
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_diagnostics
+    on_press:
+      - logger.log: "Checking GitHub for the latest firmware..."
+      - ota.http_request.flash:
+          # Version-less "latest" assets (published with every release): the OTA
+          # image plus a text file holding its MD5, which the flash verifies.
+          md5_url: https://github.com/Valar-Systems/Glasscalibur/releases/latest/download/${ota_asset}.ota.bin.md5
+          url: https://github.com/Valar-Systems/Glasscalibur/releases/latest/download/${ota_asset}.ota.bin
+
+  # Reboot the device from the web UI / Home Assistant — handy after changing a
+  # setting that only applies at boot, or to recover from a wedged state without
+  # pulling power. Uses ESPHome's built-in safe restart (flushes pending writes).
+  - platform: restart
+    name: "Restart"
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_diagnostics
 
 # -----------------------------------------------------------------------------
 # Daily open/close schedule
@@ -1143,13 +1478,16 @@ datetime:
     id: open_time
     type: time
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_schedule
     optimistic: true
     restore_value: true
     initial_value: "07:00:00"
     on_time:
       - if:
           condition:
-            lambda: 'return id(schedule_enabled).state;'
+            lambda: 'return id(schedule_enabled).state && !id(sun_schedule_enabled).state;'
           then:
             - logger.log: "Schedule: opening cover"
             - cover.open: glasscalibur_cover
@@ -1159,13 +1497,16 @@ datetime:
     id: close_time
     type: time
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_schedule
     optimistic: true
     restore_value: true
     initial_value: "21:00:00"
     on_time:
       - if:
           condition:
-            lambda: 'return id(schedule_enabled).state;'
+            lambda: 'return id(schedule_enabled).state && !id(sun_schedule_enabled).state;'
           then:
             - logger.log: "Schedule: closing cover"
             - cover.close: glasscalibur_cover
@@ -1186,6 +1527,9 @@ text:
     name: "Timezone"
     id: tz_text
     entity_category: CONFIG
+    web_server:
+      sorting_weight: 9
+      sorting_group_id: group_schedule
     mode: text
     optimistic: true
     restore_value: true
@@ -1243,30 +1587,48 @@ sensor:
       name: "Accel X"
       id: accel_x
       entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 20
+        sorting_group_id: group_diagnostics
     acceleration_y:
       name: "Accel Y"
       id: accel_y
       entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 21
+        sorting_group_id: group_diagnostics
     acceleration_z:
       name: "Accel Z"
       id: accel_z
       entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 22
+        sorting_group_id: group_diagnostics
 
   - platform: template
     name: "TSTEP Sensor" # SHOW TSTEP
     lambda: return id(driver)->read_register(TSTEP);
     update_interval: 5s
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 7
+      sorting_group_id: group_stallguard
   - platform: template # SHOW SG_RESULT
     name: "SG_RESULT Sensor"
     lambda: return id(driver)->read_register(SG_RESULT);
     update_interval: 1s
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 8
+      sorting_group_id: group_stallguard
 
   - platform: tmp1075
     name: "Motor Temperature"
     update_interval: 3s
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 7
+      sorting_group_id: group_diagnostics
     i2c_id: i2c_bus
     address: 0x49
     accuracy_decimals: 2
@@ -1285,14 +1647,23 @@ sensor:
     id: wifi_signal_db
     update_interval: 60s
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 8
+      sorting_group_id: group_diagnostics
   - platform: uptime
     name: "Uptime"
     update_interval: 60s
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 9
+      sorting_group_id: group_diagnostics
   - platform: internal_temperature
     name: "ESP Internal Temperature"
     update_interval: 60s
     entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 10
+      sorting_group_id: group_diagnostics
 
   # --- Lifetime event counters (persisted in flash) ---
   # Bump on each respective event; survive reboots. To zero them, you'd need
@@ -1303,18 +1674,27 @@ sensor:
     update_interval: 30s
     entity_category: DIAGNOSTIC
     accuracy_decimals: 0
+    web_server:
+      sorting_weight: 11
+      sorting_group_id: group_diagnostics
   - platform: template
     name: "Vibration Stall Trips"
     lambda: 'return id(vib_stall_count);'
     update_interval: 30s
     entity_category: DIAGNOSTIC
     accuracy_decimals: 0
+    web_server:
+      sorting_weight: 12
+      sorting_group_id: group_diagnostics
   - platform: template
     name: "Tamper Trips"
     lambda: 'return id(tamper_count);'
     update_interval: 30s
     entity_category: DIAGNOSTIC
     accuracy_decimals: 0
+    web_server:
+      sorting_weight: 13
+      sorting_group_id: group_diagnostics
 
 # -----------------------------------------------------------------------------
 # State exposure (HA)
@@ -1332,6 +1712,9 @@ text_sensor:
   - platform: template
     name: "State"
     id: cover_state
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_control
     update_interval: 500ms
     lambda: |-
       switch (id(global_state)) {
@@ -1341,17 +1724,39 @@ text_sensor:
         default: return {"IDLE"};
       }
 
+  # Firmware version string, shown in the Diagnostics group of the web UI and in
+  # Home Assistant device info. Static value published once from esphome.on_boot;
+  # `update_interval: never` so it isn't re-polled.
+  - platform: template
+    name: "Firmware Version"
+    id: firmware_version_text
+    icon: "mdi:chip"
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_diagnostics
+    update_interval: never
+
   # --- Network info (handy when troubleshooting connectivity) ---
   - platform: wifi_info
     ip_address:
       name: "IP Address"
       entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 17
+        sorting_group_id: group_diagnostics
     ssid:
       name: "Connected SSID"
       entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 18
+        sorting_group_id: group_diagnostics
     mac_address:
       name: "MAC Address"
       entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 19
+        sorting_group_id: group_diagnostics
 
 # -----------------------------------------------------------------------------
 # Tamper alarm
@@ -1507,3 +1912,46 @@ interval:
             - globals.set:
                 id: vib_loud_count
                 value: "0"
+
+  # ---------------------------------------------------------------------------
+  # Sun schedule poll
+  # ---------------------------------------------------------------------------
+  # When the master "Schedule Enabled" and "Sun Schedule" are both on, drive the
+  # cover to match daylight: open during the day, closed at night, using local
+  # sunrise/sunset (from the sun component) plus the minute offsets. We compare
+  # the desired daylight state to the last one we acted on and only issue a move
+  # on a transition — so it fires once at sunrise and once at sunset, reconciles
+  # to the right state on boot, and never repeatedly fights manual control.
+  # A 60 s tick is plenty for minute-resolution events.
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(schedule_enabled).state && id(sun_schedule_enabled).state;'
+          then:
+            - lambda: |-
+                auto now = id(sntp_time)->now();
+                if (!now.is_valid())
+                  return;                                   // clock not synced yet
+                auto sr = id(sun_sun)->sunrise(-0.833);     // standard sunrise/sunset elevation
+                auto ss = id(sun_sun)->sunset(-0.833);
+                if (!sr.has_value() || !ss.has_value())
+                  return;                                   // no event today (polar day/night) or no location
+                int now_min   = now.hour * 60 + now.minute;
+                int open_min  = sr->hour * 60 + sr->minute + id(global_sun_open_offset);
+                int close_min = ss->hour * 60 + ss->minute + id(global_sun_close_offset);
+                int desired = (now_min >= open_min && now_min < close_min) ? 1 : 0;
+                if (desired == id(global_sun_last_desired))
+                  return;                                   // already in the right state
+                id(global_sun_last_desired) = desired;
+                ESP_LOGI("sun_schedule", "%s cover (now %02d:%02d, open %02d:%02d, close %02d:%02d)",
+                         desired ? "opening" : "closing",
+                         now.hour, now.minute,
+                         (open_min / 60) % 24, ((open_min % 60) + 60) % 60,
+                         (close_min / 60) % 24, ((close_min % 60) + 60) % 60);
+                auto call = id(glasscalibur_cover)->make_call();
+                if (desired == 1)
+                  call.set_command_open();
+                else
+                  call.set_command_close();
+                call.perform();
