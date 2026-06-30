@@ -28,7 +28,7 @@
 external_components:
   - source: github://slimcdk/esphome-custom-components
     components: [tmc2209_hub, tmc2209, stepper]
-  - source: github://latonita/esphome@27474828624fd0224683041c182e191eedf52032
+  - source: github://Valar-Systems/esphome-lis2dh12
     components: [lis2dh12_base, lis2dh12_i2c]
 
 substitutions:
