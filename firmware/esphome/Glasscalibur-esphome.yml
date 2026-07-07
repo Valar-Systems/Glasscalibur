@@ -325,7 +325,7 @@ substitutions:
   # Assistant / the ESPHome dashboard report the running build) and the
   # "Firmware Version" diagnostic sensor shown on the web UI. Bump this on every
   # released change, then publish a matching GitHub release (see ota_asset).
-  firmware_version: "1.1.0"
+  firmware_version: "1.2.0"
 
   # Base name of the OTA asset uploaded to each GitHub release. The "Update
   # Firmware (GitHub)" button downloads
@@ -669,25 +669,31 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: 'return id(global_state) == 3;'
+                lambda: 'return id(child_lock).state;'
               then:
-                - script.stop: tamper_alarm
-                - output.turn_off: buzzer
-                - globals.set:
-                    id: tamper_detected
-                    value: "false"
-                - globals.set:
-                    id: global_state
-                    value: "0"
-                - logger.log: "Tamper alarm dismissed via button"
+                - logger.log: "Child lock on — single click ignored"
               else:
                 - if:
                     condition:
-                      lambda: 'return id(global_state) == 1 || id(global_state) == 2;'
+                      lambda: 'return id(global_state) == 3;'
                     then:
-                      - cover.stop: glasscalibur_cover
+                      - script.stop: tamper_alarm
+                      - output.turn_off: buzzer
+                      - globals.set:
+                          id: tamper_detected
+                          value: "false"
+                      - globals.set:
+                          id: global_state
+                          value: "0"
+                      - logger.log: "Tamper alarm dismissed via button"
                     else:
-                      - cover.close: glasscalibur_cover
+                      - if:
+                          condition:
+                            lambda: 'return id(global_state) == 1 || id(global_state) == 2;'
+                          then:
+                            - cover.stop: glasscalibur_cover
+                          else:
+                            - cover.close: glasscalibur_cover
           # - if:
           #     condition: ## If moving, then stop
           #       lambda: return (id(glasscalibur_cover).current_operation != COVER_OPERATION_IDLE); # Should evaluate to TRUE if moving
@@ -713,7 +719,13 @@ binary_sensor:
           - ON for at most 1.0s
           - OFF for at least 0.5s
         then:
-          - cover.open: glasscalibur_cover
+          - if:
+              condition:
+                lambda: 'return id(child_lock).state;'
+              then:
+                - logger.log: "Child lock on — double click ignored"
+              else:
+                - cover.open: glasscalibur_cover
 
           # - output.turn_on: buzzer
           # - output.ledc.set_frequency:
@@ -1207,13 +1219,38 @@ number:
             value: "-1"
 
 # -----------------------------------------------------------------------------
+# Child lock
+# -----------------------------------------------------------------------------
+# When ON, the physical Button 1 (single + double click) is ignored so the
+# cover can't be opened, closed, or stopped from the on-device button — e.g. to
+# keep a child from operating it. Remote control is intentionally unaffected:
+# the web UI, Home Assistant, and the open/close schedule all keep working, so
+# you can still operate the cover and toggle this lock from your phone. The
+# WiFi-reset button (GPIO21) is also left active so the device can always be
+# recovered. Persists across reboots; default OFF so a fresh unit is never
+# locked.
+switch:
+  - platform: template
+    name: "Child Lock"
+    id: child_lock
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_control
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.log: "Child lock enabled — physical button disabled"
+    turn_off_action:
+      - logger.log: "Child lock disabled — physical button active"
+
+# -----------------------------------------------------------------------------
 # Schedule controls
 # -----------------------------------------------------------------------------
 # Master on/off for the daily open/close schedule below. When OFF, the Open
 # Time / Close Time triggers do nothing. `optimistic` stores state locally;
 # `restore_mode` brings it back after a reboot (default OFF so a fresh unit
 # never moves the cover unattended).
-switch:
   - platform: template
     name: "Schedule Enabled"
     id: schedule_enabled
