@@ -1,0 +1,35 @@
+# Verification build for the valar-core rewire branch. Compiles the rewired
+# Glasscalibur config (which pulls valar-core + scheduling from valar-motion as
+# remote packages) on GitHub runners and uploads factory/ota bins so a board can
+# be flashed for testing. Not a release.
+name: Verify rewire build
+
+on:
+  push:
+    branches: ['rewire/valar-core']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install ESPHome
+        run: pip install esphome
+      - name: Compile Glasscalibur
+        run: esphome compile firmware/esphome/Glasscalibur.yml
+      - name: Collect binaries + md5
+        run: |
+          mkdir -p dist
+          F=$(find . -path "*/.pioenvs/*/firmware.factory.bin" | head -1)
+          O=$(find . -path "*/.pioenvs/*/firmware.ota.bin" | head -1)
+          cp "$F" dist/Glasscalibur.factory.bin
+          cp "$O" dist/Glasscalibur.ota.bin
+          md5sum dist/Glasscalibur.ota.bin | cut -d' ' -f1 > dist/Glasscalibur.ota.bin.md5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Glasscalibur
+          path: dist/*

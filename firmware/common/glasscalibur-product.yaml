@@ -1,0 +1,874 @@
+# =============================================================================
+# Glasscalibur — product layer (window-cover controller)
+# =============================================================================
+# The Glasscalibur-specific behaviour that sits ON TOP of the shared valar-core +
+# scheduling packages. The board wrapper (firmware/esphome/Glasscalibur.yml)
+# includes:
+#
+#   packages:
+#     valar_core: { url: .../valar-motion, files: [common/valar-core.yaml], ... }
+#     scheduling: { url: .../valar-motion, files: [common/scheduling.yaml], ... }
+#     product:    !include ../common/glasscalibur-product.yaml
+#
+# This layer owns: the window cover, the two physical limit switches, the
+# LIS2DH12 accelerometer (anti-tamper + vibration-stall), the TMP1075 motor
+# temperature sensor, the buzzer alarm, the tamper/vibration/stall trip logic,
+# and the schedule_open/schedule_close scripts the shared scheduling mixin calls.
+# It reuses core's driver (id: driver), tuning entities, diagnostics, and web UI
+# groups, and renames a few core entities via !extend so field units keep their
+# existing Home Assistant entity_ids.
+# =============================================================================
+
+# Product-specific external component: the Valar fork of latonita's draft
+# LIS2DH12 PR (esphome#14788). Core already pulls the TMC2209 stepper components.
+external_components:
+  - source: github://Valar-Systems/esphome-lis2dh12
+    components: [lis2dh12_base, lis2dh12_i2c]
+
+# Mechanical constants (compile-time; a new flash to change). max_distance_steps
+# is the absolute step count between the close-end limit (position 0) and the
+# open-end limit (position max_distance_steps) — the "100%" target the cover maps
+# position 1.0 to, and what the limit switches re-calibrate against.
+substitutions:
+  steps_per_revolution: "1600"      # 200 full steps x 8 microsteps
+  max_distance_revs:   "213.3669"   # informational only; = max_distance_steps / steps_per_revolution
+  max_distance_steps:  "341387"
+
+# Product boot steps. Core (priority 600) has already configured the TMC2209 and
+# stepper and published the diagnostic strings; scheduling (priority -100)
+# re-applies tz/location. Here (priority 400) we restore the saved position and
+# override it with limit-switch ground truth if a switch is currently pressed.
+esphome:
+  on_boot:
+    - priority: 400.0
+      then:
+        # Restore last saved position so the cover state is accurate on boot.
+        # A pressed limit switch (below) overrides this with the known limit value.
+        - stepper.report_position:
+            id: driver
+            position: !lambda "return id(global_current_position);"
+        - stepper.set_target:
+            id: driver
+            target: !lambda "return id(global_current_position);"
+        - logger.log: "CHECKING LIMIT SWITCHES"
+        - if:
+            condition:
+              binary_sensor.is_on: limit_switch_1
+            then:
+              - logger.log: "SETTING LIMIT 1"
+              - stepper.report_position:
+                  id: driver
+                  position: ${max_distance_steps}
+              - stepper.set_target:
+                  id: driver
+                  target: ${max_distance_steps}
+        - if:
+            condition:
+              binary_sensor.is_on: limit_switch_2
+            then:
+              - logger.log: "SETTING LIMIT 2"
+              - stepper.report_position:
+                  id: driver
+                  position: 0
+              - stepper.set_target:
+                  id: driver
+                  target: 0
+
+# Silence the LIS2DH12 status-poll chatter (merged into core's logger config).
+logger:
+  logs:
+    i2c.idf: INFO
+    lis2dh12: INFO
+
+# Append the product-only "Security / Tamper" group to the core web UI (package
+# merge concatenates sorting_groups; port/version come from core's web_server).
+web_server:
+  sorting_groups:
+    - { id: group_security, name: "Security / Tamper", sorting_weight: 40 }
+
+# --- Product state (tuning/direction globals come from core; sun globals from
+#     the scheduling mixin) -----------------------------------------------------
+globals:
+  # Cover state machine. Not persisted — every reboot starts IDLE.
+  #   0 = IDLE   1 = OPENING   2 = CLOSING   3 = TAMPERED
+  - id: global_state
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Last known stepper position in steps. Persisted so the cover survives reboots
+  # without re-homing. Saved at IDLE-transition points only (stop_action,
+  # natural target arrival) to minimize flash writes.
+  - id: global_current_position
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+  # --- Anti-tamper baseline ---
+  - id: tamper_baseline_x
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: tamper_baseline_y
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: tamper_baseline_z
+    type: float
+    restore_value: yes
+    initial_value: '-1.0'  # accelerometer faces down; at rest Z reads -1g.
+  # Latched tamper state. Cleared only by "Clear Tamper Alert".
+  - id: tamper_detected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # --- Vibration-based stall (secondary to StallGuard) ---
+  - id: vib_loud_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # millis() when the current motion command started; used to skip the first
+  # ~500 ms of a move (initial torque spikes can false-trip vib-stall).
+  - id: motion_start_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  # --- Lifetime diagnostic counters (persisted) ---
+  - id: stallguard_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: vib_stall_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: tamper_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+script:
+  # ---- Tamper alarm: pulse the buzzer for 60 s ------------------------------
+  # 500 ms on / 500 ms off at 2700 Hz. Stopped early by a Button 1 single-press,
+  # "Clear Tamper Alert", or "Set Tamper Baseline". mode: restart re-arms the
+  # 60 s timer on a fresh trip during an active alarm.
+  - id: tamper_alarm
+    mode: restart
+    then:
+      - repeat:
+          count: 60
+          then:
+            - output.turn_on: buzzer
+            - output.ledc.set_frequency:
+                id: buzzer
+                frequency: "2700Hz"
+            - output.set_level:
+                id: buzzer
+                level: "50%"
+            - delay: 500ms
+            - output.turn_off: buzzer
+            - delay: 500ms
+      - output.turn_off: buzzer       # belt-and-suspenders if loop exits early
+
+  # ---- Scheduling contract (called by common/scheduling.yaml) ----------------
+  # scheduling decides WHEN; these decide HOW. The monolith's scheduled moves
+  # simply drove the cover open/close (no extra guard beyond the mixin's own
+  # schedule-enabled check), so these mirror that.
+  - id: schedule_open
+    then:
+      - cover.open: glasscalibur_cover
+  - id: schedule_close
+    then:
+      - cover.close: glasscalibur_cover
+
+# --- Attach Glasscalibur button behaviour onto core's bare buttons ----------
+binary_sensor:
+  # Button 1 (pin_btn1 -> GPIO23): single click cycles dismiss-alarm / stop-motor
+  # / close-cover based on global_state; double click opens the cover.
+  - id: !extend btn1
+    on_multi_click:
+      # --- Single Click ---
+      # TAMPERED           -> silence the alarm + return to IDLE.
+      # OPENING or CLOSING -> stop (stop_action sets state to IDLE).
+      # Otherwise (IDLE)   -> close (close_action sets state to CLOSING).
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - if:
+              condition:
+                lambda: 'return id(global_state) == 3;'
+              then:
+                - script.stop: tamper_alarm
+                - output.turn_off: buzzer
+                - globals.set:
+                    id: tamper_detected
+                    value: "false"
+                - globals.set:
+                    id: global_state
+                    value: "0"
+                - logger.log: "Tamper alarm dismissed via button"
+              else:
+                - if:
+                    condition:
+                      lambda: 'return id(global_state) == 1 || id(global_state) == 2;'
+                    then:
+                      - cover.stop: glasscalibur_cover
+                    else:
+                      - cover.close: glasscalibur_cover
+      # --- Double Click ---
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at most 0.3s
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - cover.open: glasscalibur_cover
+
+  # Glasscalibur has no Button 2 — hide core's bare btn2 (pin_btn2 maps to a
+  # spare/unused GPIO on the board).
+  - id: !extend btn2
+    internal: true
+
+  # Rename core's "Button 3 (Wi-Fi reset)" to Glasscalibur's "WiFi Reset" and
+  # attach the hold-to-erase-credentials action (pin_btn_wifi -> GPIO21).
+  - id: !extend btn3
+    name: "WiFi Reset"
+    on_click:
+      - min_length: 3000ms
+        max_length: 10000ms
+        then:
+          - logger.log: "Clearing saved Wi-Fi credentials and rebooting into setup"
+          - lambda: |-
+              // Overwrite the persisted credentials in flash with empty values,
+              // then drop the in-memory copy so nothing is re-saved on teardown.
+              esphome::wifi::global_wifi_component->save_wifi_sta("", "");
+              esphome::wifi::global_wifi_component->clear_sta();
+          - delay: 1s                          # let the log flush before we restart
+          - lambda: "App.safe_reboot();"
+
+  # --- Physical end-stop limit switches -------------------------------------
+  # When triggered, report the known absolute position to the stepper
+  # (correcting drift), stop the cover, and inherit IDLE cleanup via stop_action.
+  # Both are polled rather than interrupt-driven (polling proved more reliable).
+  - platform: gpio
+    name: Open Limit Switch
+    id: limit_switch_1
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_diagnostics
+    pin:
+      number: GPIO15
+      mode: INPUT
+      inverted: true
+    use_interrupt: false
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      then:
+        - stepper.report_position:
+            id: driver
+            position: ${max_distance_steps}
+        - stepper.set_target:
+            id: driver
+            target: ${max_distance_steps}
+        - cover.stop: glasscalibur_cover
+        - logger.log: "LIMIT 1 PRESSED"
+
+  - platform: gpio
+    name: Close Limit Switch
+    id: limit_switch_2
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_diagnostics
+    pin:
+      number: GPIO3
+      mode: INPUT
+      inverted: true
+    use_interrupt: false
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      then:
+        - stepper.report_position:
+            id: driver
+            position: 0
+        - stepper.set_target:
+            id: driver
+            target: 0
+        - cover.stop: glasscalibur_cover
+        - logger.log: "LIMIT 2 PRESSED"
+
+  # Anti-tamper status. Set by the 1 s tamper-check interval; latched until the
+  # "Clear Tamper Alert" button is pressed.
+  - platform: template
+    name: "Tamper Detected"
+    id: tamper_sensor
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_security
+    lambda: 'return id(tamper_detected);'
+
+# --- The window cover -------------------------------------------------------
+# Template cover backed by the TMC2209 stepper. Position is reported live as a
+# 0..1 ratio of current_position / max_distance_steps.
+cover:
+  - platform: template
+    id: glasscalibur_cover
+    name: Glasscalibur
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_control
+    has_position: true
+    lambda: "return (float(id(driver)->current_position) / float(${max_distance_steps}));"
+
+    stop_action:
+      - logger.log: "COVER stop_action"
+      - stepper.stop: driver
+      - globals.set:
+          id: global_state
+          value: "0"
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: IDLE
+      - globals.set:
+          id: global_current_position
+          value: !lambda "return id(driver)->current_position;"
+
+    open_action:
+      - logger.log: "COVER open_action"
+      - lambda: 'id(motion_start_ms) = millis();'
+      - globals.set:
+          id: global_state
+          value: "1"
+      - stepper.set_target:
+          id: driver
+          target: ${max_distance_steps}
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: OPENING
+
+    close_action:
+      - logger.log: "COVER close_action"
+      - lambda: 'id(motion_start_ms) = millis();'
+      - globals.set:
+          id: global_state
+          value: "2"
+      - stepper.set_target:
+          id: driver
+          target: 0
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: CLOSING
+
+    position_action:
+      - logger.log: "COVER position_action"
+      - lambda: 'id(motion_start_ms) = millis();'
+      - if:
+          condition:
+            lambda: 'return (pos * ${max_distance_steps}) >= id(driver)->current_position;'
+          then:
+            - globals.set:
+                id: global_state
+                value: "1"
+            - cover.template.publish:
+                id: glasscalibur_cover
+                current_operation: OPENING
+          else:
+            - globals.set:
+                id: global_state
+                value: "2"
+            - cover.template.publish:
+                id: glasscalibur_cover
+                current_operation: CLOSING
+      - stepper.set_target:
+          id: driver
+          target: !lambda return pos * ${max_distance_steps};
+
+# --- Rename core tuning entities to Glasscalibur's existing entity_ids -------
+number:
+  - id: !extend num_accel
+    name: "acceleration"
+  - id: !extend num_speed
+    name: "max_speed"
+  - id: !extend num_irun
+    name: "irun"
+  - id: !extend num_sgthrs
+    name: "SGTHRS"
+  # (num_tcoolthrs is already "TCOOLTHRS" in core — not renamed.)
+
+  # --- Anti-tamper threshold (g) ---
+  - platform: template
+    name: "Tamper Threshold"
+    id: tamper_threshold
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_security
+    step: 0.05
+    min_value: 0.05
+    max_value: 2.0
+    mode: BOX
+    entity_category: CONFIG
+    unit_of_measurement: "g"
+    optimistic: true
+    restore_value: true
+    initial_value: 0.30
+
+  # --- Vibration stall threshold (g) ---
+  - platform: template
+    name: "Vibration Threshold"
+    id: vib_threshold
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_stallguard
+    step: 0.05
+    min_value: 0.05
+    max_value: 4.0
+    mode: BOX
+    entity_category: CONFIG
+    unit_of_measurement: "g"
+    optimistic: true
+    restore_value: true
+    initial_value: 0.30
+
+  # --- Vibration stall debounce (samples at 200ms each) ---
+  - platform: template
+    name: "Vibration Stall Samples"
+    id: vib_stall_samples
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_stallguard
+    step: 1
+    min_value: 2
+    max_value: 60
+    mode: BOX
+    entity_category: CONFIG
+    optimistic: true
+    restore_value: true
+    initial_value: 5
+
+# --- Product switches -------------------------------------------------------
+switch:
+  # Master enable for tamper detection. Turning ON auto-captures the current
+  # accel reading as the baseline; turning OFF silences any active alarm and
+  # clears TAMPERED state. Default OFF — user opts in.
+  - platform: template
+    name: "Tamper Detection"
+    id: tamper_enabled
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_security
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - globals.set:
+          id: tamper_baseline_x
+          value: !lambda "return id(accel_x).state;"
+      - globals.set:
+          id: tamper_baseline_y
+          value: !lambda "return id(accel_y).state;"
+      - globals.set:
+          id: tamper_baseline_z
+          value: !lambda "return id(accel_z).state;"
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - logger.log:
+          format: "Tamper detection enabled — baseline captured: x=%.3f y=%.3f z=%.3f"
+          args: ['id(accel_x).state', 'id(accel_y).state', 'id(accel_z).state']
+    turn_off_action:
+      - script.stop: tamper_alarm
+      - output.turn_off: buzzer
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - if:
+          condition:
+            lambda: 'return id(global_state) == 3;'
+          then:
+            - globals.set:
+                id: global_state
+                value: "0"
+      - logger.log: "Tamper detection disabled"
+
+  # Master enable for the accelerometer-based vibration stall check.
+  - platform: template
+    name: "Vibration Stall Detection"
+    id: vib_enabled
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_stallguard
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_off_action:
+      - globals.set:
+          id: vib_loud_count
+          value: "0"
+      - logger.log: "Vibration stall detection disabled"
+
+  # Master enable for the TMC2209 StallGuard handler.
+  - platform: template
+    name: "StallGuard Enabled"
+    id: stallguard_enabled
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_stallguard
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.log: "StallGuard handler enabled"
+    turn_off_action:
+      - logger.log: "StallGuard handler disabled"
+
+# --- Product buttons --------------------------------------------------------
+button:
+  # Capture the current X/Y/Z as the "untampered" reference.
+  - platform: template
+    name: "Set Tamper Baseline"
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_security
+    on_press:
+      - globals.set:
+          id: tamper_baseline_x
+          value: !lambda "return id(accel_x).state;"
+      - globals.set:
+          id: tamper_baseline_y
+          value: !lambda "return id(accel_y).state;"
+      - globals.set:
+          id: tamper_baseline_z
+          value: !lambda "return id(accel_z).state;"
+      - script.stop: tamper_alarm
+      - output.turn_off: buzzer
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - if:
+          condition:
+            lambda: 'return id(global_state) == 3;'
+          then:
+            - globals.set:
+                id: global_state
+                value: "0"
+      - logger.log:
+          format: "Tamper baseline captured: x=%.3f y=%.3f z=%.3f"
+          args: ['id(accel_x).state', 'id(accel_y).state', 'id(accel_z).state']
+
+  - platform: template
+    name: "Clear Tamper Alert"
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_security
+    on_press:
+      - script.stop: tamper_alarm
+      - output.turn_off: buzzer
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - if:
+          condition:
+            lambda: 'return id(global_state) == 3;'
+          then:
+            - globals.set:
+                id: global_state
+                value: "0"
+      - logger.log: "Tamper alert cleared"
+
+  # --- Lifetime counter resets ---
+  - platform: template
+    name: "Reset StallGuard Trips"
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 14
+      sorting_group_id: group_diagnostics
+    on_press:
+      - globals.set:
+          id: stallguard_count
+          value: "0"
+      - logger.log: "StallGuard trip counter reset"
+
+  - platform: template
+    name: "Reset Vibration Stall Trips"
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 15
+      sorting_group_id: group_diagnostics
+    on_press:
+      - globals.set:
+          id: vib_stall_count
+          value: "0"
+      - logger.log: "Vibration stall trip counter reset"
+
+  - platform: template
+    name: "Reset Tamper Trips"
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 16
+      sorting_group_id: group_diagnostics
+    on_press:
+      - globals.set:
+          id: tamper_count
+          value: "0"
+      - logger.log: "Tamper trip counter reset"
+
+# --- I2C bus (TMP1075 temperature + LIS2DH12 accelerometer) -----------------
+i2c:
+  sda: GPIO19
+  scl: GPIO20
+  scan: true
+  id: i2c_bus
+
+# --- LIS2DH12 accelerometer (anti-tamper + vibration-stall) -----------------
+lis2dh12_i2c:
+  id: accelerometer
+  i2c_id: i2c_bus
+  address: 0x18
+  range: 4G
+  resolution: high
+  output_data_rate: 100Hz
+  update_interval: 500ms
+
+# --- Buzzer (passive piezo on GPIO5, driven by ledc PWM) --------------------
+output:
+  - platform: ledc
+    pin: GPIO5
+    id: buzzer
+
+# --- Rename core diagnostic sensors + product sensors -----------------------
+sensor:
+  - id: !extend sen_sgresult
+    name: "SG_RESULT Sensor"
+  - id: !extend sen_tstep
+    name: "TSTEP Sensor"
+
+  # Accelerometer x/y/z feed the anti-tamper and vibration-stall logic.
+  - platform: lis2dh12_base
+    lis2dh12_id: accelerometer
+    acceleration_x:
+      name: "Accel X"
+      id: accel_x
+      entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 20
+        sorting_group_id: group_diagnostics
+    acceleration_y:
+      name: "Accel Y"
+      id: accel_y
+      entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 21
+        sorting_group_id: group_diagnostics
+    acceleration_z:
+      name: "Accel Z"
+      id: accel_z
+      entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 22
+        sorting_group_id: group_diagnostics
+
+  # Motor temperature — hard-cut the cover at 80 °C.
+  - platform: tmp1075
+    name: "Motor Temperature"
+    update_interval: 3s
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 7
+      sorting_group_id: group_diagnostics
+    i2c_id: i2c_bus
+    address: 0x49
+    accuracy_decimals: 2
+    on_value_range:
+      - above: 80
+        then:
+          - cover.stop: glasscalibur_cover
+          - logger.log: "TOO HOT!"
+
+  # --- Lifetime event counters (persisted in flash) ---
+  - platform: template
+    name: "StallGuard Trips"
+    lambda: 'return id(stallguard_count);'
+    update_interval: 30s
+    entity_category: DIAGNOSTIC
+    accuracy_decimals: 0
+    web_server:
+      sorting_weight: 11
+      sorting_group_id: group_diagnostics
+  - platform: template
+    name: "Vibration Stall Trips"
+    lambda: 'return id(vib_stall_count);'
+    update_interval: 30s
+    entity_category: DIAGNOSTIC
+    accuracy_decimals: 0
+    web_server:
+      sorting_weight: 12
+      sorting_group_id: group_diagnostics
+  - platform: template
+    name: "Tamper Trips"
+    lambda: 'return id(tamper_count);'
+    update_interval: 30s
+    entity_category: DIAGNOSTIC
+    accuracy_decimals: 0
+    web_server:
+      sorting_weight: 13
+      sorting_group_id: group_diagnostics
+
+# --- State exposure ---------------------------------------------------------
+text_sensor:
+  - platform: template
+    name: "State"
+    id: cover_state
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_control
+    update_interval: 500ms
+    lambda: |-
+      switch (id(global_state)) {
+        case 1: return {"OPENING"};
+        case 2: return {"CLOSING"};
+        case 3: return {"TAMPERED"};
+        default: return {"IDLE"};
+      }
+
+# --- Periodic intervals — motion completion, tamper check, vibration stall ---
+# (The sun-schedule poll lives in common/scheduling.yaml.)
+interval:
+  # 1. Motion-completion poll: OPENING/CLOSING -> IDLE on target arrival; persist
+  #    the final position.
+  - interval: 200ms
+    then:
+      - if:
+          condition:
+            lambda: |-
+              int s = id(global_state);
+              return (s == 1 || s == 2) &&
+                     id(driver)->current_position == id(driver)->target_position;
+          then:
+            - globals.set:
+                id: global_state
+                value: "0"
+            - cover.template.publish:
+                id: glasscalibur_cover
+                current_operation: IDLE
+            - globals.set:
+                id: global_current_position
+                value: !lambda "return id(driver)->current_position;"
+
+  # 2. Anti-tamper check — only while IDLE and tamper detection enabled.
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(tamper_enabled).state) return false;
+              if (id(global_state) != 0) return false;
+              float dx = id(accel_x).state - id(tamper_baseline_x);
+              float dy = id(accel_y).state - id(tamper_baseline_y);
+              float dz = id(accel_z).state - id(tamper_baseline_z);
+              float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+              return dist > id(tamper_threshold).state;
+          then:
+            - globals.set:
+                id: tamper_detected
+                value: "true"
+            - globals.set:
+                id: global_state
+                value: "3"
+            - lambda: 'id(tamper_count) += 1;'
+            - script.execute: tamper_alarm
+            - logger.log:
+                level: WARN
+                format: "TAMPER DETECTED (deviation > %.2fg)"
+                args: ['id(tamper_threshold).state']
+
+  # 3. Vibration-based stall check — only while OPENING/CLOSING.
+  - interval: 200ms
+    then:
+      - if:
+          condition:
+            lambda: |-
+              // Skip the first 500 ms after motion launch — initial torque
+              // spikes can read like a stall before the mechanism settles.
+              return id(vib_enabled).state &&
+                     (id(global_state) == 1 || id(global_state) == 2) &&
+                     (millis() - id(motion_start_ms)) >= 500;
+          then:
+            - lambda: |-
+                float mag = sqrtf(id(accel_x).state * id(accel_x).state +
+                                  id(accel_y).state * id(accel_y).state +
+                                  id(accel_z).state * id(accel_z).state);
+                float vibration = fabsf(mag - 1.0f);
+                // Leaky counter: +1 on loud, -1 on quiet (floored at 0). A
+                // single quiet sample mid-stall doesn't restart the count.
+                if (vibration > id(vib_threshold).state) {
+                  id(vib_loud_count) += 1;
+                } else if (id(vib_loud_count) > 0) {
+                  id(vib_loud_count) -= 1;
+                }
+            - if:
+                condition:
+                  lambda: 'return id(vib_loud_count) >= (int)id(vib_stall_samples).state;'
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "VIBRATION STALL — strong vibration for %d samples"
+                      args: ['id(vib_loud_count)']
+                  - stepper.stop: driver
+                  - globals.set:
+                      id: global_state
+                      value: "0"
+                  - cover.template.publish:
+                      id: glasscalibur_cover
+                      current_operation: IDLE
+                  - globals.set:
+                      id: global_current_position
+                      value: !lambda "return id(driver)->current_position;"
+                  - lambda: 'id(vib_stall_count) += 1;'
+                  - globals.set:
+                      id: vib_loud_count
+                      value: "0"
+          else:
+            - globals.set:
+                id: vib_loud_count
+                value: "0"
+
+# -----------------------------------------------------------------------------
+# Board-hardware + stall override (Glasscalibur-specific, via !extend on core's
+# `driver`). rsense is the board's current-sense resistor value (220 mOhm here
+# vs core's VAL-board default of 100 mOhm) — getting this right sets the real
+# motor current. Motion params match the original monolith.
+#
+# on_stall: core's handler (which zeroes position — correct for Ropener homing,
+# wrong for this absolute-position window) runs FIRST because !extend appends.
+# We run after: restore the last-saved position (undoing core's zero), then the
+# original gated stop/IDLE/count. Note: core's bare stop still fires on a stall
+# even when "StallGuard Enabled" is off — a safety-positive deviation from the
+# old firmware (the motor now stops on a hardware stall regardless of the UI
+# toggle; the software reaction below is still gated).
+# -----------------------------------------------------------------------------
+stepper:
+  - id: !extend driver
+    rsense: 220 mOhm
+    max_speed: 1200 steps/s
+    acceleration: 100 steps/s^2
+    deceleration: inf
+    on_stall:
+      - stepper.report_position:
+          id: driver
+          position: !lambda "return id(global_current_position);"
+      - if:
+          condition:
+            lambda: 'return id(stallguard_enabled).state;'
+          then:
+            - stepper.stop: driver
+            - globals.set: { id: global_state, value: "0" }
+            - cover.template.publish: { id: glasscalibur_cover, current_operation: IDLE }
+            - lambda: 'id(stallguard_count) += 1;'
+            - logger.log: "MOTOR STALLED!!!"

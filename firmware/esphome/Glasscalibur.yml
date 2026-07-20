@@ -1,0 +1,47 @@
+# =============================================================================
+# Glasscalibur — ESP32-C6 board wrapper
+# =============================================================================
+# Board wrapper: sets this board's chip, GPIO map, and OTA identity, then pulls
+# in the shared valar-core + scheduling from Valar-Systems/valar-motion as remote
+# packages and layers the Glasscalibur product on top. No board firmware is
+# copied here.
+# =============================================================================
+substitutions:
+  device_name: "glasscalibur"
+  friendly_name: "Glasscalibur"
+  board_id: "Glasscalibur (ESP32-C6)"
+  esp_board: "esp32-c6-devkitc-1"
+  log_uart: "USB_SERIAL_JTAG"
+  ota_repo: "Valar-Systems/Glasscalibur"   # field units self-update from Glasscalibur's own releases
+  ota_asset: "Glasscalibur"
+  fw_version: "1.2.0"
+  # TMC2209 driver pins (from the monolith's uart/stepper config).
+  pin_uart_tx: "1"
+  pin_uart_rx: "0"
+  pin_enn: "8"
+  pin_index: "6"
+  pin_diag: "14"
+  # Physical buttons. Button 1 = GPIO23; Wi-Fi reset = GPIO21. Glasscalibur has
+  # no Button 2, so pin_btn2 maps to GPIO2 — a spare/unused GPIO on this board
+  # (the product hides btn2 with internal: true).
+  pin_btn1: "23"
+  pin_btn2: "2"
+  pin_btn_wifi: "21"
+
+esphome:
+  project:
+    name: "valar-systems.glasscalibur"
+    version: "${fw_version}"
+
+packages:
+  valar_core:
+    url: https://github.com/Valar-Systems/valar-motion
+    ref: v0.2.0
+    files: [common/valar-core.yaml]
+    refresh: 1d
+  scheduling:
+    url: https://github.com/Valar-Systems/valar-motion
+    ref: v0.2.0
+    files: [common/scheduling.yaml]
+    refresh: 1d
+  product: !include ../common/glasscalibur-product.yaml
