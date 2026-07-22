@@ -417,7 +417,7 @@ logger:
 # while the TMC2209 StallGuard registers drop to an advanced group at the bottom.
 web_server:
   sorting_groups:
-    - { id: group_tuning,   name: "Motion Tuning",         sorting_weight: 20 }
+    - { id: group_tuning,   name: "Motion Tuning",         sorting_weight: 12 }
     - { id: group_cal,      name: "Calibration",           sorting_weight: 22 }
     - { id: group_stall,    name: "Stall Detection",       sorting_weight: 24 }
     - { id: group_security, name: "Security / Tamper",     sorting_weight: 45 }
@@ -968,16 +968,41 @@ number:
   - id: !extend num_accel
     web_server: { sorting_weight: 2, sorting_group_id: group_tuning }
 
-  # Cap motor current at IRUN 19 (rated 0.6 A on this board's sense-resistor math,
-  # I_RMS = (CS+1)/32 × 0.9575 A). Core's num_irun allows up to 31; anything above
-  # 19 pushes this motor past its 60 °C case limit — never raise it. The on_boot
-  # clamp (priority 650) also fixes values restored from older firmware. Sits in
-  # Motion Tuning with Speed/Acceleration.
+  # Friendly motor current in milliamps (Motion Tuning). The driver knows this
+  # board's Rsense (220 mOhm) and Vsense, so read_run_current_mA / write_run_current_mA
+  # do the register conversion — no formula here. IRUN 19 (this motor's thermal
+  # ceiling, rated 0.6 A) is ~600 mA on this board, so max_value caps there: the
+  # motor's 60 °C case limit leaves no headroom above it. Values snap to the
+  # nearest of the 32 register steps (~30 mA). Keeps global_irun (persisted,
+  # reapplied on boot) in sync with the register the driver just derived.
+  - platform: template
+    name: "Motor Current"
+    id: num_motor_current
+    unit_of_measurement: "mA"
+    icon: "mdi:current-dc"
+    web_server: { sorting_weight: 3, sorting_group_id: group_tuning }
+    min_value: 100
+    max_value: 600
+    step: 10
+    mode: BOX
+    entity_category: CONFIG
+    lambda: "return id(driver)->read_run_current_mA();"
+    update_interval: 5s
+    set_action:
+      - lambda: "id(driver)->write_run_current_mA((uint16_t) x);"
+      - globals.set:
+          id: global_irun
+          value: !lambda "return id(driver)->read_field(IRUN_FIELD);"
+
+  # Raw IRUN register (1-19) is meaningless to most users — the friendly Motor
+  # Current above drives it in mA. Keep the raw register in the advanced group for
+  # power users, still capped at 19.
   - id: !extend num_irun
+    name: "IRUN value"
     max_value: 19
     web_server:
-      sorting_weight: 3
-      sorting_group_id: group_tuning
+      sorting_weight: 6
+      sorting_group_id: group_sg_adv
 
   # TCOOLTHRS + SGTHRS are TMC2209 StallGuard registers -> the advanced group at
   # the bottom of the page (they are tuning knobs for StallGuard, not everyday
