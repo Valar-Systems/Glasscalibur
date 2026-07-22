@@ -1,13 +1,45 @@
 # Changelog
 
-All notable changes to the Glasscalibur firmware are documented here. The
-version number is the `firmware_version` substitution in
-[`firmware/esphome/Glasscalibur-esphome.yml`](firmware/esphome/Glasscalibur-esphome.yml),
-which feeds `project.version` (reported to Home Assistant / the ESPHome
-dashboard) and the "Firmware Version" diagnostic sensor on the web UI.
+All notable changes to the Glasscalibur firmware are documented here. As of
+v2.0.0 the version number comes from the release git tag: the build workflow
+stamps it into the `fw_version` substitution (feeding `project.version` reported
+to Home Assistant / the ESPHome dashboard and the "Firmware Version" diagnostic
+sensor). Local/branch builds report `dev`.
 
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
+
+## [2.0.0] - 2026-07-22
+
+Major architectural change: the firmware is now built on the shared
+**valar-core** + **scheduling** packages (from `Valar-Systems/valar-motion`,
+pinned at `v0.3.0`) rather than a single monolithic config. Board infrastructure
+(Wi-Fi, API, OTA, web UI, diagnostics, the TMC2209 driver, and the daily/sun
+schedule) comes from core; only Glasscalibur's product hardware and logic (cover,
+limit switches, LIS2DH12 tamper/vibration, TMP1075, buzzer, child lock, and the
+auto-calibration sequence) live in the product layer.
+
+### Added
+- **Auto-calibration** (double-click the Wi-Fi/Calibrate button, or the
+  "Auto-Calibrate" entity): a 3-phase sequence that homes on the limit switches,
+  searches for the minimum viable motor current, and tunes StallGuard (SGTHRS /
+  TCOOLTHRS) and the vibration threshold from the measured travel. Result is
+  shown in "Calibration Status" and persisted. Includes a stall auto-release
+  back-off and a thermal guard.
+- **Board** diagnostic sensor (from core), reporting the board identity.
+
+### Changed
+- **BREAKING — tuning entity names** now match the shared core across the Valar
+  product line. Home Assistant `entity_id`s change accordingly:
+  `max_speed` → **Speed**, `acceleration` → **Acceleration**,
+  `irun` → **IRUN (motor current)**, `SGTHRS` → **SGTHRS (stall threshold)**,
+  and the `TSTEP Sensor` / `SG_RESULT Sensor` diagnostics → **TSTEP** / **SG_RESULT**.
+  Motor-current entries are still capped at IRUN 19 (rated 0.6 A).
+- Firmware version now comes from the release tag (see note above) instead of a
+  hardcoded `firmware_version` substitution.
+- The GitHub-OTA "Update Firmware" button, the Restart button, and the
+  Firmware Version / network-info diagnostics are now provided by core (the OTA
+  asset URL — `Glasscalibur.ota.bin` from the latest release — is unchanged).
 
 ## [1.2.0] - 2026-06-30
 
@@ -54,6 +86,7 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Wi-Fi provisioning with no hardcoded credentials (fallback hotspot + captive
   portal, Improv over USB serial).
 
+[2.0.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.0.0
 [1.2.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.0.0
