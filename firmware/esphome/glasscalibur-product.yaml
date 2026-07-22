@@ -388,6 +388,35 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # --- StallGuard auto-tune (self-healing SGTHRS) state ---
+  # Peak vibration (g) seen during the current travel; reset at motion start,
+  # maxed in the vibration interval. It is the cross-check for whether a StallGuard
+  # trip was a real (shaky) stall or a quiet false trip.
+  - id: vib_run_peak
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  # Set true when the StallGuard handler fires during the current travel; reset at
+  # motion start. Lets the vibration detector tell "StallGuard also caught this"
+  # from "StallGuard missed a real stall".
+  - id: sg_fired_this_move
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # Consecutive quiet mid-travel StallGuard trips. A single quiet trip is weak
+  # evidence (the accelerometer can miss a fast stall), so auto-tune only lowers
+  # SGTHRS after a run of them. Reset by vibration agreement or a clean full
+  # travel. Not persisted — a fresh boot re-earns the evidence.
+  - id: sg_quiet_streak
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # Lifetime count of auto-tune adjustments (persisted, surfaced as a diagnostic).
+  - id: sg_autotune_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
 # -----------------------------------------------------------------------------
 # Product-layer overrides of shared infrastructure
 # -----------------------------------------------------------------------------
@@ -556,6 +585,10 @@ stepper:
             - globals.set:
                 id: global_current_position
                 value: !lambda "return id(driver)->current_position;"
+            # Record the fire and, if auto-tune is on, cross-check vibration to
+            # decide whether this was a real stall or a false trip (see the
+            # sg_autotune_eval script). Runs last so global_state/position are set.
+            - script.execute: sg_autotune_eval
 
 # -----------------------------------------------------------------------------
 # Physical buttons + end-stop limit switches
@@ -750,6 +783,9 @@ binary_sensor:
                   target: ${max_distance_steps}
               - cover.stop: glasscalibur_cover
               - logger.log: "LIMIT 1 PRESSED"
+              # A full travel reached its end stop -> the StallGuard tune is fine;
+              # clear any accumulated quiet-trip evidence (auto-tune).
+              - lambda: 'id(sg_quiet_streak) = 0;'
             else:
               - logger.log: "LIMIT 1 blip while closing - ignored"
           
@@ -789,6 +825,7 @@ binary_sensor:
                   target: 0
               - cover.stop: glasscalibur_cover
               - logger.log: "LIMIT 2 PRESSED"
+              - lambda: 'id(sg_quiet_streak) = 0;'   # clean full travel -> tune OK (auto-tune)
             else:
               - logger.log: "LIMIT 2 blip while opening - ignored"
 
@@ -903,7 +940,10 @@ cover:
 
     open_action:
       - logger.log: "COVER open_action"
-      - lambda: 'id(motion_start_ms) = millis();'
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
       - globals.set:
           id: global_state
           value: "1"
@@ -916,7 +956,10 @@ cover:
 
     close_action:
       - logger.log: "COVER close_action"
-      - lambda: 'id(motion_start_ms) = millis();'
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
       - globals.set:
           id: global_state
           value: "2"
@@ -929,7 +972,10 @@ cover:
 
     position_action:
       - logger.log: "COVER position_action"
-      - lambda: 'id(motion_start_ms) = millis();'
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
       # Direction is inferred by comparing the new target to current_position.
       - if:
           condition:
@@ -1208,6 +1254,28 @@ switch:
     turn_off_action:
       - logger.log: "StallGuard handler disabled"
 
+  # Self-healing StallGuard tune. When ON (and StallGuard + Vibration Stall
+  # Detection are both on), the firmware cross-checks every StallGuard trip against
+  # the accelerometer: it RAISES SGTHRS when vibration catches a stall StallGuard
+  # missed, and LOWERS it after a run of quiet mid-travel trips that look like false
+  # positives. Adjustments are ±1 register step at a time and clamped to a safe
+  # band; each is logged and counted. Advanced/opt-in (default OFF) — it slowly
+  # drifts a safety threshold, so enable it only once a baseline calibration is
+  # trusted. A fresh Auto-Calibrate always overrides whatever it has drifted to.
+  - platform: template
+    name: "StallGuard Auto-Tune"
+    id: sg_autotune
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 7
+      sorting_group_id: group_sg_adv
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.log: "StallGuard auto-tune enabled"
+    turn_off_action:
+      - logger.log: "StallGuard auto-tune disabled"
+
 # -----------------------------------------------------------------------------
 # Removed core entity
 # -----------------------------------------------------------------------------
@@ -1468,6 +1536,15 @@ sensor:
     web_server:
       sorting_weight: 13
       sorting_group_id: group_diagnostics
+  - platform: template
+    name: "Auto-Tune Adjustments"
+    lambda: 'return id(sg_autotune_count);'
+    update_interval: 30s
+    entity_category: DIAGNOSTIC
+    accuracy_decimals: 0
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_sg_adv
 
 # -----------------------------------------------------------------------------
 # State exposure (HA)
@@ -2063,6 +2140,52 @@ script:
           id: global_current_position
           value: !lambda 'return id(driver)->current_position;'
 
+  # StallGuard auto-tune — lower-direction cross-check, run from the on_stall
+  # handler. Records that StallGuard fired this move, then (only when the
+  # "StallGuard Auto-Tune" switch is on and vibration detection is available)
+  # decides whether the trip was real:
+  #   - vibration agreed (peak >= half the Vibration Threshold)  -> real stall,
+  #     the tune is fine; clear the quiet streak.
+  #   - vibration stayed at free-run levels AND the trip was mid-travel (not near
+  #     an end stop, where a decel/limit trip is expected) -> a probable false
+  #     trip; bump the quiet streak. Only after THREE consecutive such trips —
+  #     strong evidence of chronic over-sensitivity, since the accelerometer can
+  #     miss a single fast stall — lower SGTHRS one step (harder to trip) and
+  #     reset. Clamped to a safe floor. The raise direction lives in the vibration
+  #     interval (it has the high-confidence signal). Small, bounded, opt-in, and
+  #     every change is logged and counted.
+  - id: sg_autotune_eval
+    then:
+      - lambda: |-
+          id(sg_fired_this_move) = true;
+          if (!id(sg_autotune).state || !id(vib_enabled).state) return;
+          // Ignore trips near either end stop — a StallGuard trip as the sash
+          // seats against a limit is expected, not a false positive.
+          int32_t pos = id(driver)->current_position;
+          float frac = (float)pos / (float)${max_distance_steps};
+          if (frac < 0.05f || frac > 0.95f) return;
+          float bar = 0.5f * id(vib_threshold).state;
+          if (id(vib_run_peak) >= bar) {           // vibration agreed -> real stall
+            id(sg_quiet_streak) = 0;
+            return;
+          }
+          // Quiet mid-travel trip -> weak evidence of over-sensitivity.
+          id(sg_quiet_streak) += 1;
+          ESP_LOGI("sg_autotune", "quiet mid-travel StallGuard trip (%d/3), peak=%.3fg bar=%.3fg",
+                   id(sg_quiet_streak), id(vib_run_peak), bar);
+          if (id(sg_quiet_streak) >= 3) {
+            int v = id(global_sgthrs) - 2;          // lower = less sensitive
+            if (v < 2) v = 2;                       // safe floor
+            if (v != id(global_sgthrs)) {
+              id(global_sgthrs) = v;
+              global_sgthrs->update();              // persist (restore_value global)
+              id(driver)->write_register(SGTHRS, v);
+              id(sg_autotune_count) += 1;
+              ESP_LOGW("sg_autotune", "3 quiet trips -> lowering SGTHRS to %d (less sensitive)", v);
+            }
+            id(sg_quiet_streak) = 0;
+          }
+
 # -----------------------------------------------------------------------------
 # Motion-completion poll
 # -----------------------------------------------------------------------------
@@ -2190,6 +2313,9 @@ interval:
                 constexpr float G_MS2 = 9.80665f;
                 float mag_g = sqrtf(x*x + y*y + z*z) / G_MS2;
                 float vibration = fabsf(mag_g - 1.0f);
+                // Track the peak vibration this travel for the StallGuard
+                // auto-tune cross-check (see sg_autotune_eval).
+                if (vibration > id(vib_run_peak)) id(vib_run_peak) = vibration;
                 // Asymmetric leaky counter: +2 on loud, -1 on quiet
                 // (floored at 0). A skipping stall's judder alternates
                 // violent and quiet readings at this 500 ms sample cadence;
@@ -2213,6 +2339,26 @@ interval:
                       args: ['id(vib_loud_count)']
                   - stepper.stop: driver
                   - lambda: 'id(vib_stall_count) += 1;'
+                  # StallGuard auto-tune — RAISE direction (high confidence). The
+                  # vibration detector needed sustained judder to trip, so this is
+                  # a real stall. If StallGuard was armed but did NOT fire during
+                  # this travel, it was too insensitive and missed it -> raise
+                  # SGTHRS one step (easier to trip), clamped to a safe ceiling.
+                  - if:
+                      condition:
+                        lambda: 'return id(sg_autotune).state && id(stallguard_enabled).state && !id(sg_fired_this_move);'
+                      then:
+                        - lambda: |-
+                            int v = id(global_sgthrs) + 2;   // higher = more sensitive
+                            if (v > 60) v = 60;              // safe ceiling for this device
+                            if (v != id(global_sgthrs)) {
+                              id(global_sgthrs) = v;
+                              global_sgthrs->update();
+                              id(driver)->write_register(SGTHRS, v);
+                              id(sg_autotune_count) += 1;
+                              id(sg_quiet_streak) = 0;
+                              ESP_LOGW("sg_autotune", "vibration caught a stall StallGuard missed -> raising SGTHRS to %d", v);
+                            }
                   # Stall auto-release — same behavior as the StallGuard
                   # on_stall path (the leadscrew holds clamp force until
                   # reversed). Runs BEFORE global_state is zeroed: the stall
