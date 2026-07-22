@@ -404,15 +404,24 @@ logger:
     i2c.idf: INFO
     lis2dh12: INFO
 
-# One product-only web UI group. Control / Setup / Motion Tuning / StallGuard /
-# Diagnostics come from core, and Schedule from the scheduling mixin (package
-# merge concatenates sorting_groups). group_security holds the tamper/anti-theft
-# entities. Product entities that target core's groups (group_control,
-# group_motion, group_stallguard, group_diagnostics) resolve against core's
-# definitions; the empty group_setup simply doesn't render.
+# Web UI groups. Control / Schedule / Diagnostics come from core + the scheduling
+# mixin. Everything else is defined here so the page reads top-to-bottom as:
+# Control, Motion Tuning, Calibration, Stall Detection, Schedule, Security,
+# Diagnostics, StallGuard (advanced).
+#
+# A product can't re-weight a core group (redefining its id errors), so — as on
+# the Ropener — we define NEW groups and move the relevant entities into them,
+# leaving core's group_motion / group_stallguard / group_setup empty (empty groups
+# don't render). Motion Tuning sits above Schedule (25); the accelerometer-based
+# Stall Detection is its own first-class group (it is NOT a StallGuard feature),
+# while the TMC2209 StallGuard registers drop to an advanced group at the bottom.
 web_server:
   sorting_groups:
-    - { id: group_security, name: "Security / Tamper", sorting_weight: 45 }
+    - { id: group_tuning,   name: "Motion Tuning",         sorting_weight: 20 }
+    - { id: group_cal,      name: "Calibration",           sorting_weight: 22 }
+    - { id: group_stall,    name: "Stall Detection",       sorting_weight: 24 }
+    - { id: group_security, name: "Security / Tamper",     sorting_weight: 45 }
+    - { id: group_sg_adv,   name: "StallGuard (advanced)", sorting_weight: 70 }
 
 # -----------------------------------------------------------------------------
 # Device identity + boot-time motor configuration
@@ -948,19 +957,35 @@ cover:
 # value we wrote.
 number:
   # Speed, Acceleration, TCOOLTHRS and SGTHRS come from core; Latitude/Longitude
-  # and the sun offsets from the scheduling mixin. This product only tightens the
-  # current cap and adds its tamper/vibration tuning numbers.
+  # and the sun offsets from the scheduling mixin. This product retargets those
+  # core numbers into the reorganized groups, tightens the current cap, and adds
+  # its own tamper/vibration tuning numbers.
+
+  # Move core's Speed + Acceleration into the product Motion Tuning group (above
+  # Schedule). Core's own group_motion is left empty and does not render.
+  - id: !extend num_speed
+    web_server: { sorting_weight: 1, sorting_group_id: group_tuning }
+  - id: !extend num_accel
+    web_server: { sorting_weight: 2, sorting_group_id: group_tuning }
 
   # Cap motor current at IRUN 19 (rated 0.6 A on this board's sense-resistor math,
   # I_RMS = (CS+1)/32 × 0.9575 A). Core's num_irun allows up to 31; anything above
   # 19 pushes this motor past its 60 °C case limit — never raise it. The on_boot
-  # clamp (priority 650) also fixes values restored from older firmware. Keep it in
-  # the Motion Tuning group where Glasscalibur has always shown it.
+  # clamp (priority 650) also fixes values restored from older firmware. Sits in
+  # Motion Tuning with Speed/Acceleration.
   - id: !extend num_irun
     max_value: 19
     web_server:
       sorting_weight: 3
-      sorting_group_id: group_motion
+      sorting_group_id: group_tuning
+
+  # TCOOLTHRS + SGTHRS are TMC2209 StallGuard registers -> the advanced group at
+  # the bottom of the page (they are tuning knobs for StallGuard, not everyday
+  # controls). Core defines them in its group_stallguard, which is left empty.
+  - id: !extend num_tcoolthrs
+    web_server: { sorting_weight: 3, sorting_group_id: group_sg_adv }
+  - id: !extend num_sgthrs
+    web_server: { sorting_weight: 2, sorting_group_id: group_sg_adv }
 
 
 # --- Anti-tamper threshold (g) ---
@@ -992,8 +1017,8 @@ number:
     name: "Vibration Threshold"
     id: vib_threshold
     web_server:
-      sorting_weight: 5
-      sorting_group_id: group_stallguard
+      sorting_weight: 2
+      sorting_group_id: group_stall
     step: 0.05
     min_value: 0.05
     max_value: 4.0
@@ -1013,8 +1038,8 @@ number:
     name: "Vibration Stall Samples"
     id: vib_stall_samples
     web_server:
-      sorting_weight: 6
-      sorting_group_id: group_stallguard
+      sorting_weight: 3
+      sorting_group_id: group_stall
     step: 1
     min_value: 2
     max_value: 60
@@ -1114,8 +1139,8 @@ switch:
     id: vib_enabled
     entity_category: CONFIG
     web_server:
-      sorting_weight: 4
-      sorting_group_id: group_stallguard
+      sorting_weight: 1
+      sorting_group_id: group_stall
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     turn_off_action:
@@ -1137,7 +1162,7 @@ switch:
     entity_category: CONFIG
     web_server:
       sorting_weight: 1
-      sorting_group_id: group_stallguard
+      sorting_group_id: group_sg_adv
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     turn_on_action:
@@ -1266,7 +1291,7 @@ button:
     entity_category: CONFIG
     web_server:
       sorting_weight: 1
-      sorting_group_id: group_stallguard
+      sorting_group_id: group_cal
     on_press:
       - script.execute: auto_calibrate
 
@@ -1317,6 +1342,14 @@ lis2dh12_i2c:
 # StallGuard sensitivity (drive the motor under load, watch SG_RESULT, set
 # SGTHRS to about half of it). Motor temperature is hard-cut at 80 °C.
 sensor:
+  # Core's SG_RESULT / TSTEP readouts are StallGuard-tuning diagnostics; move them
+  # from core's Diagnostics group down into the advanced StallGuard group with the
+  # SGTHRS/TCOOLTHRS registers they help tune.
+  - id: !extend sen_sgresult
+    web_server: { sorting_weight: 4, sorting_group_id: group_sg_adv }
+  - id: !extend sen_tstep
+    web_server: { sorting_weight: 5, sorting_group_id: group_sg_adv }
+
   - platform: lis2dh12_base
     lis2dh12_id: accelerometer
     acceleration_x:
@@ -1438,7 +1471,7 @@ text_sensor:
     entity_category: DIAGNOSTIC
     web_server:
       sorting_weight: 2
-      sorting_group_id: group_stallguard
+      sorting_group_id: group_cal
     update_interval: 30s
     lambda: |-
       if (id(cal_active)) {
