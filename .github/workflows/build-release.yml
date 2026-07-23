@@ -1,0 +1,54 @@
+# Build the Glasscalibur firmware and, on a tag, attach the factory + OTA
+# binaries (and the .ota.bin.md5 the on-device "Update Firmware (GitHub)" button
+# needs) to the GitHub release. Field units self-update by asset name, so keep
+# the "Glasscalibur" asset name stable.
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install ESPHome
+        run: pip install esphome
+
+      # On a tag build, stamp the release version (strip a leading "v") so the
+      # on-device "Firmware Version" matches the release the unit is running.
+      - name: Compile Glasscalibur
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            V="${{ github.ref_name }}"; V="${V#v}"
+            esphome -s fw_version "$V" compile firmware/esphome/Glasscalibur-esphome.yml
+          else
+            esphome compile firmware/esphome/Glasscalibur-esphome.yml
+          fi
+
+      - name: Collect binaries + md5
+        run: |
+          mkdir -p dist
+          F=$(find . -path "*/.pioenvs/*/firmware.factory.bin" | head -1)
+          O=$(find . -path "*/.pioenvs/*/firmware.ota.bin" | head -1)
+          cp "$F" "dist/Glasscalibur.factory.bin"
+          cp "$O" "dist/Glasscalibur.ota.bin"
+          md5sum "dist/Glasscalibur.ota.bin" | cut -d' ' -f1 > "dist/Glasscalibur.ota.bin.md5"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Glasscalibur
+          path: dist/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
