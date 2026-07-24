@@ -1020,10 +1020,11 @@ number:
   # core numbers into the reorganized groups, tightens the current cap, and adds
   # its own tamper/vibration tuning numbers.
 
-  # Move core's Speed + Acceleration into the product Motion Tuning group (above
-  # Schedule). Core's own group_motion is left empty and does not render.
+  # Acceleration lives in Motion Tuning. The raw Speed slider is driven by the
+  # friendly Slow/Medium/Fast preset select (below) and moves to the advanced
+  # group for power users; core's own group_motion is left empty and doesn't render.
   - id: !extend num_speed
-    web_server: { sorting_weight: 1, sorting_group_id: group_tuning }
+    web_server: { sorting_weight: 8, sorting_group_id: group_sg_adv }
   - id: !extend num_accel
     web_server: { sorting_weight: 2, sorting_group_id: group_tuning }
 
@@ -1283,6 +1284,40 @@ switch:
 # motor_direction_default substitution) and there is no runtime direction
 # control, so drop core's "Motor Direction" select.
 select:
+  # Friendly speed presets. Values were chosen from an accelerometer resonance
+  # sweep of this mechanism: there is a violent drivetrain resonance at ~2900-3300
+  # (worst 3000-3100) that all three presets stay clear of. Slow 1200 is silent;
+  # Medium 2600 sits just below the band; Fast 5500 is well above it (ramps only
+  # cross the band transiently, which is harmless). Like Motor Direction on other
+  # boards this holds no state of its own — it reads/writes global_speed (the
+  # single source of truth, restored on boot). The raw Speed slider lives in the
+  # advanced group. Changing speed re-flags the StallGuard calibration as stale
+  # automatically (SG_RESULT is speed-dependent; see Calibration Status).
+  - platform: template
+    name: "Speed"
+    id: sel_speed
+    icon: "mdi:speedometer"
+    entity_category: CONFIG
+    web_server: { sorting_weight: 1, sorting_group_id: group_tuning }
+    update_interval: 1s
+    options: ["Slow", "Medium", "Fast"]
+    lambda: |-
+      const int sp = id(global_speed);
+      if (sp <= 1900) return std::string("Slow");     // 1200
+      if (sp <= 4050) return std::string("Medium");   // 2600
+      return std::string("Fast");                     // 5500
+    set_action:
+      - lambda: |-
+          int s = 5500;                               // Fast
+          if (x.find("Slow") != std::string::npos) s = 1200;
+          else if (x.find("Medium") != std::string::npos) s = 2600;
+          id(global_speed) = s;
+      - stepper.set_speed: { id: driver, speed: !lambda "return id(global_speed);" }
+      - lambda: |-
+          // Persist immediately so the choice survives an unplug seconds later.
+          global_speed->update();
+          global_preferences->sync();
+
   - id: !remove sel_direction
 
 # -----------------------------------------------------------------------------

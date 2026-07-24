@@ -39,7 +39,7 @@ substitutions:
   stepper_rsense: "220 mOhm"
   stepper_vsense: "false"
   stepper_deceleration: "inf"          # immediate stop
-  stepper_max_speed: "1200 steps/s"
+  stepper_max_speed: "5500 steps/s"
   stepper_acceleration: "100 steps/s^2"
   stepper_config_dump: "false"
   motor_direction_default: "COUNTERCLOCKWISE"
