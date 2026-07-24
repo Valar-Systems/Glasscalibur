@@ -9,7 +9,24 @@ sensor). Local/branch builds report `dev`.
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [2.1.0] - 2026-07-23
+
+### Added
+- **Speed presets — Slow / Medium / Fast** (Motion Tuning): 1200 / 2600 / 5500
+  steps/s, chosen from an accelerometer resonance sweep of this mechanism. The
+  drivetrain has a violent resonance at ~2900–3300 steps/s (worst 3000–3100);
+  all three presets stay clear of it (ramps only cross it transiently, which is
+  harmless). The max-speed cap was raised 1200 → 5500 — the motor tracks cleanly
+  well beyond, but above ~6000 the free-run vibration starts false-tripping the
+  stall detector, so 5500 is the ceiling. Fast is ~4.5× the previous top speed.
+  The raw Speed slider moves to the advanced group.
+- **StallGuard Auto-Tune** switch (advanced group, opt-in, default OFF): a
+  self-healing SGTHRS that cross-checks every StallGuard trip against the
+  accelerometer. It raises the threshold when vibration catches a stall StallGuard
+  missed, and lowers it after a run of quiet mid-travel trips that look like false
+  positives. Adjustments are one register step at a time, clamped to a safe band,
+  logged, and counted via a new "Auto-Tune Adjustments" diagnostic. A fresh
+  Auto-Calibrate always overrides whatever it has drifted to.
 
 ### Changed
 - **Calibration button gesture: double-click → 7 quick presses** (GPIO21).
@@ -95,6 +112,7 @@ auto-calibration sequence) live in the product layer.
 - Wi-Fi provisioning with no hardcoded credentials (fallback hotspot + captive
   portal, Improv over USB serial).
 
+[2.1.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.0.0
 [1.2.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.1.0
