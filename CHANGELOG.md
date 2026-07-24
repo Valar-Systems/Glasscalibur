@@ -9,6 +9,15 @@ sensor). Local/branch builds report `dev`.
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- **Calibration button gesture: double-click → 7 quick presses** (GPIO21).
+  Auto-calibration drives the window through its full travel, so the trigger
+  is now deliberately hard to hit by accident; a stray double-tap no longer
+  starts it. The 3–10 s hold (Wi-Fi credential wipe) on the same button is
+  unchanged, and the two timings still cannot overlap.
+
 ## [2.0.0] - 2026-07-22
 
 Major architectural change: the firmware is now built on the shared

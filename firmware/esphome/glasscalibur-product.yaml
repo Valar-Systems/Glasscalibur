@@ -31,7 +31,7 @@
 #   GPIO8  : ENN       (TMC2209 enable, active low)
 #   GPIO14 : DIAG      (TMC2209 StallGuard / fault output -> on_stall)
 #   GPIO15 : Open-end limit switch (active low, polled)
-#   GPIO21 : Calibration / Wi-Fi Reset button (active low; double-click =
+#   GPIO21 : Calibration / Wi-Fi Reset button (active low; 7 quick presses =
 #            auto-calibrate, hold 3-10 s to clear Wi-Fi creds — the timings
 #            must never overlap)
 #   GPIO19 : I2C SDA
@@ -81,7 +81,7 @@
 #                       IDLE            -> close the cover
 #     - Double click  : open the cover (ignored while calibrating)
 #   Calibration / WiFi Reset (GPIO21):
-#     - Double click  : start auto-calibration (see the auto_calibrate script)
+#     - 7 quick clicks: start auto-calibration (see the auto_calibrate script)
 #     - Hold 3-10 s   : clear saved Wi-Fi credentials and reboot into setup
 #
 # -----------------------------------------------------------------------------
@@ -793,9 +793,12 @@ binary_sensor:
               - logger.log: "LIMIT 2 blip while opening - ignored"
 
   # Calibration / WiFi Reset (GPIO21) — two gestures, non-overlapping timings:
-  #   * Double-click (presses ≤ 0.6 s each) -> start auto-calibration. The
-  #     script announces itself (3 beeps + 2 s) before any motion and refuses
-  #     if the device is busy, tampered, or the motor is hot.
+  #   * 7 quick presses (each ≤ 0.6 s) -> start auto-calibration. Seven is
+  #     deliberate: calibration drives the window through its full travel, so
+  #     the trigger must be impossible to hit accidentally (a stray
+  #     double-tap used to be enough). The script still announces itself
+  #     (3 beeps + 2 s) before any motion and refuses if the device is busy,
+  #     tampered, or the motor is hot.
   #   * Hold 3-10 s -> erase saved Wi-Fi credentials and reboot into setup
   #     mode. A long hold is required (not a quick tap) so the device can't
   #     be knocked offline by an accidental press. On reboot the device
@@ -803,7 +806,7 @@ binary_sensor:
   #     into the firmware), it broadcasts the "glasscalibur-XXXXXX" hotspot /
   #     captive portal so a new network can be entered (Improv over USB
   #     serial works too).
-  # A double-click press can never satisfy the 3 s minimum hold, so the two
+  # A calibration press can never satisfy the 3 s minimum hold, so the two
   # gestures cannot both fire from one input.
   - platform: gpio
     name: WiFi Reset
@@ -822,9 +825,19 @@ binary_sensor:
           - ON for at most 0.6s
           - OFF for at most 0.4s
           - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
           - OFF for at least 0.3s
         then:
-          - logger.log: "CAL: requested via calibration button double-click"
+          - logger.log: "CAL: requested via calibration button (7 presses)"
           - script.execute: auto_calibrate
     on_click:
       - min_length: 3000ms

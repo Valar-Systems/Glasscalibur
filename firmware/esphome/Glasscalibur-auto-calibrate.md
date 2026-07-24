@@ -96,8 +96,9 @@ Entities/IDs added:
   the old `cal_travel_timeout: 90s` expired mid-travel and failed every
   healthy probe. Each travel instead arms `cal_t0_ms`/`cal_budget_ms` from
   the live speed (nominal × 1.5 + 10 s).
-- Triggers: GPIO21 **double-click** (on_multi_click, presses ≤0.6 s; the
-  3–10 s hold on the same pin is Wi-Fi credential wipe — different timing,
+- Triggers: GPIO21 **7 quick presses** (on_multi_click, presses ≤0.6 s each —
+  deliberately hard to hit by accident, since calibration drives full travel;
+  the 3–10 s hold on the same pin is Wi-Fi credential wipe — different timing,
   must not overlap); Button 1 single-click **aborts** a running calibration
   (also restores irun 19 and the saved vibration threshold); Button 1
   double-click, the time schedules, the sun schedule, and the tamper check
@@ -202,7 +203,7 @@ Entities/IDs added:
    stall during release just stops. Release must exist in BOTH stall paths.
 9. **NAN temperature = refuse**, in the cal gate and any future thermal
    logic. Sensor absent means protection absent.
-10. **GPIO21 gestures must not overlap:** double-click (≤0.6 s presses) =
+10. **GPIO21 gestures must not overlap:** 7 quick presses (≤0.6 s each) =
     calibrate; 3–10 s hold = Wi-Fi wipe.
 11. **Limit-switch presses are direction-gated.** A switch press acts
     (resync position + stop) only when travel is toward that switch or the
