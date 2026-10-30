@@ -269,3 +269,48 @@ B5 (no motion, R4-approved; any unit on 2026.6.5) GET /cover/Glasscalibur -> 200
    JSON with "name_id":"cover/Glasscalibur"; GET /cover/glasscalibur -> 200 and a
    "Deprecated URL format" log line; GET /switch/Schedule%20Enabled -> 200.
    Sabotage: GET /cover/NoSuchCover -> 404.
+
+## Amendment 1 — P2.1 re-registered after a miss (appended; nothing above was edited)
+
+### The miss, on record
+
+Original P2.1 (above, unchanged): "exactly one call each". Readings at base, ESPHome
+2026.6.5, generated main.cpp, all three targets:
+
+- GC: `wifi_wificomponent_id->set_reboot_timeout(900000)` and `api_apiserver_id->set_reboot_timeout(900000)` (2 calls)
+- R3000: `wifi_wificomponent_id->set_reboot_timeout(900000)` and `api_apiserver_id->set_reboot_timeout(0)` (2 calls)
+- R3100: `wifi_wificomponent_id->set_reboot_timeout(900000)` and `api_apiserver_id->set_reboot_timeout(0)` (2 calls)
+
+Cause, as recorded by the ruling: the first pattern counted every `set_reboot_timeout(`
+call, and Wi-Fi's own (900000) is a second one. Work stopped and was reported.
+
+### Ruling (verbatim; one paragraph replaced by a pointer)
+
+Source: the reviewer chat, 2026-10-30 ~18:15Z, pasted into the working session by Daniel.
+
+> P2.1: re-registration approved. The original text and the miss stay on record, for all three targets.
+> - New P2.1: in each build's generated code, exactly one `api_apiserver_id->set_reboot_timeout(` call, with the value 0.
+>   Zero matches fails as well, so an api block given its own id fails loudly instead of passing silently.
+> - Its sabotage: one target built with the api block's `reboot_timeout: 0s` removed. Predicted: that target's call reads
+>   900000, red. Predict, then run.
+> - The miss's cause, recorded: the first pattern counted every set_reboot_timeout( call, and Wi-Fi's own (900000) is a
+>   second one.
+>
+> P1.3: complete on all three targets, as reported. The P1.4 hashes are accepted as recorded.
+>
+> [One paragraph of this ruling, an observation request, is recorded outside this repository.]
+
+### P2.1 (re-registered)
+
+Check: in each release build's generated main.cpp, count lines matching
+`api_apiserver_id->set_reboot_timeout(`. Pass = exactly one, with the value 0.
+Zero matches fails; two or more fails; any other value fails.
+
+Predicted, Glasscalibur: base reads `api_apiserver_id->set_reboot_timeout(900000)` (the
+bug, recorded above); head, after the item-2 commit, reads exactly one
+`api_apiserver_id->set_reboot_timeout(0)`.
+Sabotage: run on Ropener VAL3000 (see its predictions file).
+
+### Observation
+
+The observation this ruling asked for is recorded outside this repository.
