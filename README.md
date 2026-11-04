@@ -127,7 +127,7 @@ You have several options, and they all work at once:
 | --- | --- |
 | **Web browser** | Open `http://glasscalibur-XXXXXX.local` (the `XXXXXX` MAC suffix is printed on the USB serial log at boot). Full control panel — cover, motor tuning, schedule, diagnostics. |
 | **Home Assistant** | The device is auto‑discovered over the native ESPHome API as a `cover` entity. No YAML, no curl. |
-| **HTTP / REST** | The ESPHome web server exposes a REST API, e.g. `POST http://glasscalibur-XXXXXX.local/cover/glasscalibur/set?position=0.5` (position is `0.0`=closed … `1.0`=open), and `/open`, `/close`, `/stop`. Drive it from Node‑RED, scripts, or webhooks. |
+| **HTTP / REST** | The ESPHome web server exposes a REST API addressed by entity **name**, e.g. `POST http://glasscalibur-XXXXXX.local/cover/Glasscalibur/set?position=0.5` (position is `0.0`=closed … `1.0`=open), and `/cover/Glasscalibur/open`, `/close`, `/stop`. Names are case-sensitive; write a space as `%20` (e.g. `/switch/Schedule%20Enabled/turn_on`). The older lower-case object-ID form is deprecated and stops working in newer ESPHome releases. Drive it from Node‑RED, scripts, or webhooks. |
 
 ### Scheduling
 
