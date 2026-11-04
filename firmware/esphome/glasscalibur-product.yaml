@@ -427,7 +427,20 @@ globals:
 # Substitutions (mechanical + OTA identity) moved to the board wrapper. api, ota,
 # http_request, safe_mode, wifi, captive_portal, improv_serial, time and sun all
 # come from valar-core / the scheduling mixin. Only the product-specific slivers
-# of logger and web_server remain here; package merge folds them into core's.
+# of api, logger and web_server remain here; package merge folds them into core's.
+
+# The API's reboot_timeout defaults to 15 min: if no *API* client connects in
+# that window the device reboots. It counts native-API clients only — a browser
+# on the web UI is not one. The Glasscalibur is sold as working without Home
+# Assistant, so a customer driving it purely from the browser got a controller
+# that rebooted every 15 minutes, stopping the window mid-travel if it happened
+# to be moving. 0 = never reboot for lack of a client.
+#
+# Trade-off: this also removes the watchdog that recovers a wedged API
+# connection. Acceptable here — the users it was rebooting are the ones not
+# using the API at all — and safe_mode still covers boot loops.
+api:
+  reboot_timeout: 0s
 
 # Add the LIS2DH12 i2c-poll log silencing to core's logger. Package merge folds
 # this logs map into core's (core owns the console uart + base level).
