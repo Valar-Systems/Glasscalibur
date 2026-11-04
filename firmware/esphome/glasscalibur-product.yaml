@@ -692,32 +692,10 @@ binary_sensor:
               condition:
                 lambda: 'return id(cal_active);'
               then:
-                - script.stop: auto_calibrate
-                - script.stop: cal_leg
+                # The cover's STOP ends a running calibration from every
+                # source (stop_action -> motion_halt, then cal_abort), so the
+                # button takes the same path as the web UI and Home Assistant.
                 - cover.stop: glasscalibur_cover
-                - switch.turn_on: stallguard_enabled
-                - switch.turn_on: vib_enabled
-                # Put back the vibration threshold the user had before the
-                # script raised it to the calibration backstop.
-                - number.set:
-                    id: vib_threshold
-                    value: !lambda 'return id(cal_vib_prev);'
-                - globals.set:
-                    id: cal_active
-                    value: 'false'
-                - globals.set:
-                    id: cal_result
-                    value: '5'
-                # The aborted probe may have left a mid-search candidate
-                # (e.g. 12) in the driver — restore the rated current.
-                - globals.set:
-                    id: global_irun
-                    value: '19'
-                - tmc2209.currents:
-                    irun: !lambda 'return id(global_irun);'
-                - logger.log: "CAL: aborted by user"
-                - script.execute: cal_beep_fail
-                - component.update: cal_status
                 # Swallow the click — don't fall through to stop/close.
               else:
                 - if:
@@ -838,7 +816,7 @@ binary_sensor:
               - stepper.set_target:
                   id: driver
                   target: ${max_distance_steps}
-              - cover.stop: glasscalibur_cover
+              - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 1 PRESSED"
               # A full travel reached its end stop -> the StallGuard tune is fine;
               # clear any accumulated quiet-trip evidence (auto-tune).
@@ -880,7 +858,7 @@ binary_sensor:
               - stepper.set_target:
                   id: driver
                   target: 0
-              - cover.stop: glasscalibur_cover
+              - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 2 PRESSED"
               - lambda: 'id(sg_quiet_streak) = 0;'   # clean full travel -> tune OK (auto-tune)
             else:
@@ -982,52 +960,48 @@ cover:
     has_position: true
     lambda: "return (float(id(driver)->current_position) / float(${max_distance_steps}));"
 
+    # stop_action is the USER's STOP: web UI, Home Assistant, the API, Button 1,
+    # the 80 °C cutoff and the stop-on-update listener. It halts at once and, if
+    # a calibration is running, ends it. The firmware's own stops (limit
+    # switches, calibration legs, stall handling) call motion_halt directly, so
+    # they never end a calibration by accident.
     stop_action:
       - logger.log: "COVER stop_action"
-      - stepper.stop: driver
-      - globals.set:
-          id: global_state
-          value: "0"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: IDLE
-      - globals.set:
-          id: global_current_position
-          value: !lambda "return id(driver)->current_position;"
+      - script.execute: motion_halt
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
 
+    # A user Open / Close / Set-position during calibration ends the calibration
+    # first (cal_abort, as STOP does), then carries out the move with the normal
+    # detector posture. Calibration drives through drive_open / drive_close
+    # directly, so its own travels never abort it.
     open_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
       - logger.log: "COVER open_action"
-      - lambda: |-
-          id(motion_start_ms) = millis();
-          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-          id(sg_fired_this_move) = false;
-      - globals.set:
-          id: global_state
-          value: "1"
-      - stepper.set_target:
-          id: driver
-          target: ${max_distance_steps}
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: OPENING
+      - script.execute: drive_open
 
     close_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
       - logger.log: "COVER close_action"
-      - lambda: |-
-          id(motion_start_ms) = millis();
-          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-          id(sg_fired_this_move) = false;
-      - globals.set:
-          id: global_state
-          value: "2"
-      - stepper.set_target:
-          id: driver
-          target: 0
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: CLOSING
+      - script.execute: drive_close
 
     position_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
       - logger.log: "COVER position_action"
       - lambda: |-
           id(motion_start_ms) = millis();
@@ -1591,6 +1565,9 @@ sensor:
     on_value_range:
       - above: 80
         then:
+          # During calibration, end it as a thermal abort (result 4) before the
+          # STOP; outside calibration cal_thermal_guard does nothing.
+          - script.execute: cal_thermal_guard
           - cover.stop: glasscalibur_cover
           - logger.log: "TOO HOT!"
 
@@ -1747,6 +1724,87 @@ script:
             - logger.log: "Schedule: closing cover"
             - cover.close: glasscalibur_cover
 
+  # Firmware stop: halt at once, report IDLE, save the position. Used by the
+  # limit switches, calibration and stall handling — every stop that is not the
+  # user's STOP, so none of them ends a calibration (see the cover's stop_action).
+  - id: motion_halt
+    then:
+      - stepper.stop: driver
+      - globals.set:
+          id: global_state
+          value: "0"
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: IDLE
+      - globals.set:
+          id: global_current_position
+          value: !lambda "return id(driver)->current_position;"
+
+  # End a running calibration in its ship-safe posture: both stall detectors on,
+  # the user's vibration threshold back, rated current, result 5 ("Aborted by
+  # user"). It does not move the motor: stop_action halts first; a user
+  # Open / Close / Set-position starts its own move after it.
+  - id: cal_abort
+    then:
+      - script.stop: auto_calibrate
+      - script.stop: cal_leg
+      - switch.turn_on: stallguard_enabled
+      - switch.turn_on: vib_enabled
+      # Put back the vibration threshold the user had before the script raised
+      # it to the calibration backstop.
+      - number.set:
+          id: vib_threshold
+          value: !lambda 'return id(cal_vib_prev);'
+      - globals.set:
+          id: cal_active
+          value: 'false'
+      - globals.set:
+          id: cal_result
+          value: '5'
+      # The aborted probe may have left a mid-search candidate (e.g. 12) in the
+      # driver — restore the rated current.
+      - globals.set:
+          id: global_irun
+          value: '19'
+      - tmc2209.currents:
+          irun: !lambda 'return id(global_irun);'
+      - logger.log: "CAL: aborted by user"
+      - script.execute: cal_beep_fail
+      - component.update: cal_status
+
+  # The motion half of the cover's open / close actions. Those call these after
+  # their calibration check; calibration calls them directly.
+  - id: drive_open
+    then:
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
+      - globals.set:
+          id: global_state
+          value: "1"
+      - stepper.set_target:
+          id: driver
+          target: ${max_distance_steps}
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: OPENING
+  - id: drive_close
+    then:
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
+      - globals.set:
+          id: global_state
+          value: "2"
+      - stepper.set_target:
+          id: driver
+          target: 0
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: CLOSING
+
   - id: tamper_alarm
     mode: restart
     then:
@@ -1808,11 +1866,13 @@ script:
   #      worst legitimate load and false-stalls instantly (the original
   #      tuning bug). Vibration Threshold = 3 × free-run max, clamped
   #      [0.15, 0.45] g.
-  #   7. EVERY exit path (success, fail, homing bail-out, user abort in
-  #      Button 1) re-enables BOTH detectors — ship-safe posture.
+  #   7. EVERY exit path (success, fail, homing bail-out, thermal stop, user
+  #      abort via cal_abort) re-enables BOTH detectors — ship-safe posture.
   #
-  # Abort: Button 1 single-click (checked BEFORE Child Lock — stopping an
-  # autonomous multi-travel sequence is a safety control, never lockable).
+  # Abort: the cover's STOP from any source — web UI, Home Assistant, the API,
+  # Button 1 single-click (checked BEFORE Child Lock: stopping an autonomous
+  # multi-travel sequence is a safety control, never lockable) — or a user
+  # Open / Close / Set-position. All of them go through cal_abort.
   # ===========================================================================
   - id: auto_calibrate
     mode: single
@@ -1838,6 +1898,9 @@ script:
       - globals.set:
           id: cal_active
           value: 'true'
+      # Capture the user's vibration threshold before anything can abort, so an
+      # abort even during the announce puts back the right value.
+      - lambda: 'id(cal_vib_prev) = id(vib_threshold).state;'
       - globals.set:
           id: cal_done
           value: 'false'
@@ -1870,7 +1933,6 @@ script:
       # ---- 3. Detector posture ---------------------------------------------
       - switch.turn_off: stallguard_enabled
       - switch.turn_on: vib_enabled
-      - lambda: 'id(cal_vib_prev) = id(vib_threshold).state;'
       - number.set:
           id: vib_threshold
           value: !lambda |-
@@ -1900,7 +1962,7 @@ script:
                 if (spd < 100) spd = 100;
                 id(cal_budget_ms) = (uint32_t)(1000.0f * ${max_distance_steps} / (float)spd * 1.5f) + 10000;
                 id(cal_t0_ms) = millis();
-            - cover.close: glasscalibur_cover
+            - script.execute: drive_close
             - wait_until:
                 condition:
                   lambda: |-
@@ -1911,7 +1973,7 @@ script:
             binary_sensor.is_off: limit_switch_2
           then:
             # Could not even home — bail out safe.
-            - cover.stop: glasscalibur_cover
+            - script.execute: motion_halt
             - globals.set:
                 id: cal_result
                 value: '3'
@@ -2100,7 +2162,7 @@ script:
                 level: WARN
                 format: "CAL: thermal stop - motor %.1f degC (limit 55). Cool down, then re-run."
                 args: ['id(motor_temp).state']
-            - cover.stop: glasscalibur_cover
+            - script.execute: motion_halt
             - globals.set:
                 id: cal_result
                 value: '4'
@@ -2189,9 +2251,9 @@ script:
                 condition:
                   lambda: 'return opening;'
                 then:
-                  - cover.open: glasscalibur_cover
+                  - script.execute: drive_open
                 else:
-                  - cover.close: glasscalibur_cover
+                  - script.execute: drive_close
             - wait_until:
                 condition:
                   lambda: |-
@@ -2208,7 +2270,7 @@ script:
                   # ladder the while-condition ends the leg instead — a spot
                   # that still stalls at 19 is an obstruction or jam, never
                   # something to muscle through.
-                  - cover.stop: glasscalibur_cover
+                  - script.execute: motion_halt
                   - lambda: 'id(cal_irun_index) += 1;'
                   - delay: 300ms
       - lambda: |-
