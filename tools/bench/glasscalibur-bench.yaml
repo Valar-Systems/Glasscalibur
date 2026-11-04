@@ -1,0 +1,23 @@
+# =============================================================================
+# BENCH ONLY — never flash this to a customer unit. Never built by CI or a release.
+# =============================================================================
+# The Glasscalibur release firmware plus one test button, "BENCH: simulate
+# stall", for the bench checks in
+# tools/regression-gate/predictions/2026-10-field-hardening.md (B3): StallGuard
+# does not fire on cue, so the button runs the stall response on demand. It acts
+# only while the cover is moving and does what the TMC2209 on_stall handler does:
+# stop the motor, then stall_response. The release targets never include it.
+packages:
+  glasscalibur: !include ../../firmware/esphome/Glasscalibur-esphome.yml
+
+button:
+  - platform: template
+    name: "BENCH: simulate stall"
+    on_press:
+      - if:
+          condition:
+            lambda: 'int s = id(global_state); return s == 1 || s == 2;'
+          then:
+            - stepper.stop: driver
+            - logger.log: "BENCH: simulated stall"
+            - script.execute: stall_response

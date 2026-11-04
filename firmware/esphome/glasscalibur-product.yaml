@@ -50,8 +50,9 @@
 #   below) that defines the full travel between limits. Hitting a limit
 #   switch re-calibrates the stepper to a known absolute position (0 at the
 #   close end, max_distance_steps at the open end), correcting any drift.
-#   Position is persisted to flash at every IDLE transition so the cover
-#   survives reboots without re-homing.
+#   Position is saved at every IDLE transition, refreshed every 200 ms while
+#   moving, and captured once more at shutdown, so the cover survives reboots
+#   (including one mid-travel) without re-homing.
 #
 # -----------------------------------------------------------------------------
 # State machine (global_state, mirrored to the "State" text_sensor)
@@ -61,9 +62,11 @@
 #   2 = CLOSING   driving toward 0
 #   3 = TAMPERED  tamper detected; alarm active or pending acknowledgement
 #
-#   OPENING/CLOSING return to IDLE via the 200 ms motion-completion poll,
-#   any cover stop_action (limit switch, temperature cutoff, manual stop),
-#   or the TMC2209 on_stall handler. TAMPERED is a *soft indicator* —
+#   OPENING/CLOSING return to IDLE via the 200 ms motion-completion poll
+#   (target reached — including the end of a stall back-off, which shows its
+#   real direction while it runs) or motion_halt (user STOP, limit switch,
+#   temperature cutoff, calibration, a stall during a back-off). TAMPERED is
+#   a *soft indicator* —
 #   subsequent motion commands override it; it only returns to IDLE on
 #   explicit acknowledgement (Button 1 single-click, "Clear Tamper Alert",
 #   or "Set Tamper Baseline").
@@ -162,11 +165,15 @@
 # - valar-systems: Valar fork of latonita's draft LIS2DH12 PR (esphome#14788)
 #   with four fixes — stale-sample guard, throttled loop() reads, optional
 #   data-ready interrupt pin, and on-chip high-pass filter support.
+# Both pinned to the exact commits v2.1.0 was built from (each was its repo's
+# head at release time), so a rebuild is reproducible. Unpinned, they followed
+# whatever each default branch held on build day. slimcdk is the same commit
+# valar-core pins. Bump only deliberately, with the regression gate.
 external_components:
-  - source: github://slimcdk/esphome-custom-components
+  - source: github://slimcdk/esphome-custom-components@b5f0e44ae8732f68b9bbeaed9e962ca052d04cdb
     components: [tmc2209_hub, tmc2209, stepper]
 
-  - source: github://Valar-Systems/esphome-lis2dh12
+  - source: github://Valar-Systems/esphome-lis2dh12@f9cbb99993f8ecee9e224e94e19a23b8aaf8e445
     components: [lis2dh12_base, lis2dh12_i2c]
 
 globals:
@@ -185,18 +192,21 @@ globals:
   #   3 = TAMPERED tamper detected; cleared by "Clear Tamper Alert" or
   #                "Set Tamper Baseline" buttons. Tracks tamper_detected.
   # Mirrored to HA via the "State" text_sensor. Transitions back to IDLE
-  # happen on stop_action (which the limit switches and the temperature cutoff
-  # both fan into) and on the stepper's on_stall handler.
+  # happen in motion_halt (the user's STOP, the limit switches, calibration,
+  # a stall that just stops) and in the 200 ms completion poll (target reached,
+  # including the end of a stall back-off, which reports its real direction).
   - id: global_state
     type: int
     restore_value: no
     initial_value: '0'
 
   # Last known stepper position in steps. Persisted so the cover entity
-  # survives reboots without re-homing. Saved at IDLE-transition points only
-  # (stop_action, on_stall, natural target arrival) to minimize flash writes —
-  # not in the 200 ms poll, despite Ropener doing so, since we don't need a
-  # per-tick checkpoint.
+  # survives reboots without re-homing. Saved at IDLE transitions (stop_action,
+  # on_stall, natural target arrival), refreshed by the 200 ms poll while moving
+  # (as the Ropener does), and captured from the driver at shutdown (on_shutdown
+  # below). It used to be saved at IDLE transitions only, so a reboot mid-travel
+  # restored the position the travel STARTED from. RAM-only per tick: ESPHome
+  # flushes changed globals to flash at most once a minute, and at shutdown.
   - id: global_current_position
     type: int
     restore_value: yes
@@ -381,8 +391,9 @@ globals:
     initial_value: '0'
 
   # Stall auto-release handshake. One back-off per stall event: set when a
-  # release starts, cleared by stall_release_clear 5 s later. A second stall
-  # while the flag is set just stops (jammed solid — don't oscillate).
+  # back-off starts and held until it ends (the completion poll, motion_halt,
+  # or the next user move clears it). A second stall while it is set just
+  # stops (jammed solid — don't oscillate).
   - id: stall_release_active
     type: bool
     restore_value: no
@@ -423,7 +434,28 @@ globals:
 # Substitutions (mechanical + OTA identity) moved to the board wrapper. api, ota,
 # http_request, safe_mode, wifi, captive_portal, improv_serial, time and sun all
 # come from valar-core / the scheduling mixin. Only the product-specific slivers
-# of logger and web_server remain here; package merge folds them into core's.
+# of api, logger and web_server remain here; package merge folds them into core's.
+
+# The API's reboot_timeout defaults to 15 min: if no *API* client connects in
+# that window the device reboots. It counts native-API clients only — a browser
+# on the web UI is not one. The Glasscalibur is sold as working without Home
+# Assistant, so a customer driving it purely from the browser got a controller
+# that rebooted every 15 minutes, stopping the window mid-travel if it happened
+# to be moving. 0 = never reboot for lack of a client.
+#
+# Trade-off: this also removes the watchdog that recovers a wedged API
+# connection. Acceptable here — the users it was rebooting are the ones not
+# using the API at all — and safe_mode still covers boot loops.
+api:
+  reboot_timeout: 0s
+
+# Log-only. Its real job: ESPHome compiles in the OTA listener interface used by
+# the stop-on-update listener (on_boot, priority 900) only when some OTA
+# platform has an on_* trigger. This merges into core's esphome OTA entry.
+ota:
+  - platform: esphome
+    on_begin:
+      - logger.log: "Firmware update starting"
 
 # Add the LIS2DH12 i2c-poll log silencing to core's logger. Package merge folds
 # this logs map into core's (core owns the console uart + base level).
@@ -468,7 +500,36 @@ esphome:
   # the board's motor_direction_default). Timezone / lat-long re-apply is done by
   # the scheduling mixin's priority -100 on_boot. This product adds only what core
   # can't know about: the current clamp and limit-switch homing.
+  # Capture where the motor actually is at every soft reboot (Restart button,
+  # end of a firmware update, any App.reboot). ESPHome runs on_shutdown hooks in
+  # reverse setup-priority order, so at priority 600 this runs before the
+  # globals store their values (800) and before the preference syncer flushes
+  # them to flash (1000) — the saved position is the stop point, not the start
+  # of the travel. A power cut skips shutdown; the 200 ms refresh covers that.
+  on_shutdown:
+    - priority: 600
+      then:
+        - lambda: 'id(global_current_position) = id(driver)->current_position;'
   on_boot:
+    # The motor stops when a firmware update begins, however it was started
+    # (ESPHome, the device's own web page, or the "Update Firmware (GitHub)"
+    # button). Every OTA platform reports the start of an update to ESPHome's
+    # global OTA callback; this listener answers OTA_STARTED with the cover's
+    # normal STOP, so stop_action runs exactly as if the user had pressed STOP.
+    # Registered once at boot; the callback object is created on first use.
+    - priority: 900
+      then:
+        - lambda: |-
+            struct StopOnUpdate : public ota::OTAGlobalStateListener {
+              void on_ota_global_state(ota::OTAState state, float progress, uint8_t error,
+                                       ota::OTAComponent *component) override {
+                if (state != ota::OTA_STARTED) return;
+                ESP_LOGI("update", "Firmware update starting - stopping the motor");
+                id(glasscalibur_cover).make_call().set_command_stop().perform();
+              }
+            };
+            static StopOnUpdate stop_on_update;
+            ota::get_global_ota_callback()->add_global_state_listener(&stop_on_update);
     # BEFORE core configures the driver (core boots at priority 600): clamp the
     # restored motor current. Units upgraded from firmware that allowed irun up to
     # 31 restore the old value from flash; core's currents would otherwise push it
@@ -551,40 +612,10 @@ stepper:
           then:
             - stepper.stop: driver
             - lambda: 'id(stallguard_count) += 1;'
-            - logger.log: "MOTOR STALLED - backing off"
-            # Stall auto-release: the leadscrew is not backdrivable, so a
-            # stall against an obstruction HOLDS whatever clamp force it
-            # reached until the motor reverses. Back off ~8 mm so "stops
-            # while still clamping" becomes genuine auto-reverse. Must run
-            # BEFORE global_state is zeroed below — the stall direction is
-            # what decides which way to back off. One release per event:
-            # a second stall while stall_release_active is set (jammed
-            # solid) just stops.
-            - if:
-                condition:
-                  lambda: 'return !id(stall_release_active);'
-                then:
-                  - globals.set:
-                      id: stall_release_active
-                      value: 'true'
-                  - lambda: |-
-                      int32_t pos = id(driver)->current_position;
-                      int32_t rel = ${stall_release_steps};
-                      // Stalled while CLOSING (state 2): back off toward open.
-                      // Stalled while OPENING: back off toward close.
-                      int32_t tgt = (id(global_state) == 2) ? pos + rel : pos - rel;
-                      if (tgt < 0) tgt = 0;
-                      id(driver)->set_target(tgt);
-                  - script.execute: stall_release_clear
-            - globals.set:
-                id: global_state
-                value: "0"
-            - cover.template.publish:
-                id: glasscalibur_cover
-                current_operation: IDLE
-            - globals.set:
-                id: global_current_position
-                value: !lambda "return id(driver)->current_position;"
+            - logger.log: "MOTOR STALLED (StallGuard)"
+            # Back-off and state handling: stall_response (shared with the
+            # vibration-stall check).
+            - script.execute: stall_response
             # Record the fire and, if auto-tune is on, cross-check vibration to
             # decide whether this was a real stall or a false trip (see the
             # sg_autotune_eval script). Runs last so global_state/position are set.
@@ -635,32 +666,10 @@ binary_sensor:
               condition:
                 lambda: 'return id(cal_active);'
               then:
-                - script.stop: auto_calibrate
-                - script.stop: cal_leg
+                # The cover's STOP ends a running calibration from every
+                # source (stop_action -> motion_halt, then cal_abort), so the
+                # button takes the same path as the web UI and Home Assistant.
                 - cover.stop: glasscalibur_cover
-                - switch.turn_on: stallguard_enabled
-                - switch.turn_on: vib_enabled
-                # Put back the vibration threshold the user had before the
-                # script raised it to the calibration backstop.
-                - number.set:
-                    id: vib_threshold
-                    value: !lambda 'return id(cal_vib_prev);'
-                - globals.set:
-                    id: cal_active
-                    value: 'false'
-                - globals.set:
-                    id: cal_result
-                    value: '5'
-                # The aborted probe may have left a mid-search candidate
-                # (e.g. 12) in the driver — restore the rated current.
-                - globals.set:
-                    id: global_irun
-                    value: '19'
-                - tmc2209.currents:
-                    irun: !lambda 'return id(global_irun);'
-                - logger.log: "CAL: aborted by user"
-                - script.execute: cal_beep_fail
-                - component.update: cal_status
                 # Swallow the click — don't fall through to stop/close.
               else:
                 - if:
@@ -781,7 +790,7 @@ binary_sensor:
               - stepper.set_target:
                   id: driver
                   target: ${max_distance_steps}
-              - cover.stop: glasscalibur_cover
+              - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 1 PRESSED"
               # A full travel reached its end stop -> the StallGuard tune is fine;
               # clear any accumulated quiet-trip evidence (auto-tune).
@@ -823,7 +832,7 @@ binary_sensor:
               - stepper.set_target:
                   id: driver
                   target: 0
-              - cover.stop: glasscalibur_cover
+              - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 2 PRESSED"
               - lambda: 'id(sg_quiet_streak) = 0;'   # clean full travel -> tune OK (auto-tune)
             else:
@@ -925,57 +934,54 @@ cover:
     has_position: true
     lambda: "return (float(id(driver)->current_position) / float(${max_distance_steps}));"
 
+    # stop_action is the USER's STOP: web UI, Home Assistant, the API, Button 1,
+    # the 80 °C cutoff and the stop-on-update listener. It halts at once and, if
+    # a calibration is running, ends it. The firmware's own stops (limit
+    # switches, calibration legs, stall handling) call motion_halt directly, so
+    # they never end a calibration by accident.
     stop_action:
       - logger.log: "COVER stop_action"
-      - stepper.stop: driver
-      - globals.set:
-          id: global_state
-          value: "0"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: IDLE
-      - globals.set:
-          id: global_current_position
-          value: !lambda "return id(driver)->current_position;"
+      - script.execute: motion_halt
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
 
+    # A user Open / Close / Set-position during calibration ends the calibration
+    # first (cal_abort, as STOP does), then carries out the move with the normal
+    # detector posture. Calibration drives through drive_open / drive_close
+    # directly, so its own travels never abort it.
     open_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
       - logger.log: "COVER open_action"
-      - lambda: |-
-          id(motion_start_ms) = millis();
-          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-          id(sg_fired_this_move) = false;
-      - globals.set:
-          id: global_state
-          value: "1"
-      - stepper.set_target:
-          id: driver
-          target: ${max_distance_steps}
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: OPENING
+      - script.execute: drive_open
 
     close_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
       - logger.log: "COVER close_action"
-      - lambda: |-
-          id(motion_start_ms) = millis();
-          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-          id(sg_fired_this_move) = false;
-      - globals.set:
-          id: global_state
-          value: "2"
-      - stepper.set_target:
-          id: driver
-          target: 0
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: CLOSING
+      - script.execute: drive_close
 
     position_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
       - logger.log: "COVER position_action"
       - lambda: |-
           id(motion_start_ms) = millis();
           id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
           id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
       # Direction is inferred by comparing the new target to current_position.
       - if:
           condition:
@@ -1005,6 +1011,23 @@ cover:
     # close_action / position_action / stop_action above already publish
     # OPENING / CLOSING / IDLE, and the 200 ms motion-completion poll flips
     # back to IDLE on target arrival, so these handlers are not needed at all.
+
+# -----------------------------------------------------------------------------
+# Obstruction event
+# -----------------------------------------------------------------------------
+# Fires "obstructed" each time a stall stops a motion outside calibration,
+# whichever detector caught it (StallGuard or the vibration check). Home
+# Assistant automations can trigger on it directly; the trip counters below
+# only refresh every 30 s. It needs a stall detector switched on: StallGuard and
+# Vibration Stall Detection both ship OFF until an auto-calibration enables them.
+event:
+  - platform: template
+    name: "Obstruction"
+    id: obstruction_event
+    event_types: ["obstructed"]
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_control
 
 # -----------------------------------------------------------------------------
 # Tunable number entities
@@ -1534,6 +1557,9 @@ sensor:
     on_value_range:
       - above: 80
         then:
+          # During calibration, end it as a thermal abort (result 4) before the
+          # STOP; outside calibration cal_thermal_guard does nothing.
+          - script.execute: cal_thermal_guard
           - cover.stop: glasscalibur_cover
           - logger.log: "TOO HOT!"
 
@@ -1690,6 +1716,92 @@ script:
             - logger.log: "Schedule: closing cover"
             - cover.close: glasscalibur_cover
 
+  # Firmware stop: halt at once, report IDLE, save the position. Used by the
+  # limit switches, calibration and stall handling — every stop that is not the
+  # user's STOP, so none of them ends a calibration (see the cover's stop_action).
+  - id: motion_halt
+    then:
+      - stepper.stop: driver
+      - globals.set:
+          id: global_state
+          value: "0"
+      - globals.set:
+          id: stall_release_active
+          value: 'false'
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: IDLE
+      - globals.set:
+          id: global_current_position
+          value: !lambda "return id(driver)->current_position;"
+
+  # End a running calibration in its ship-safe posture: both stall detectors on,
+  # the user's vibration threshold back, rated current, result 5 ("Aborted by
+  # user"). It does not move the motor: stop_action halts first; a user
+  # Open / Close / Set-position starts its own move after it.
+  - id: cal_abort
+    then:
+      - script.stop: auto_calibrate
+      - script.stop: cal_leg
+      - switch.turn_on: stallguard_enabled
+      - switch.turn_on: vib_enabled
+      # Put back the vibration threshold the user had before the script raised
+      # it to the calibration backstop.
+      - number.set:
+          id: vib_threshold
+          value: !lambda 'return id(cal_vib_prev);'
+      - globals.set:
+          id: cal_active
+          value: 'false'
+      - globals.set:
+          id: cal_result
+          value: '5'
+      # The aborted probe may have left a mid-search candidate (e.g. 12) in the
+      # driver — restore the rated current.
+      - globals.set:
+          id: global_irun
+          value: '19'
+      - tmc2209.currents:
+          irun: !lambda 'return id(global_irun);'
+      - logger.log: "CAL: aborted by user"
+      - script.execute: cal_beep_fail
+      - component.update: cal_status
+
+  # The motion half of the cover's open / close actions. Those call these after
+  # their calibration check; calibration calls them directly.
+  - id: drive_open
+    then:
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
+      - globals.set:
+          id: global_state
+          value: "1"
+      - stepper.set_target:
+          id: driver
+          target: ${max_distance_steps}
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: OPENING
+  - id: drive_close
+    then:
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
+      - globals.set:
+          id: global_state
+          value: "2"
+      - stepper.set_target:
+          id: driver
+          target: 0
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: CLOSING
+
   - id: tamper_alarm
     mode: restart
     then:
@@ -1751,11 +1863,13 @@ script:
   #      worst legitimate load and false-stalls instantly (the original
   #      tuning bug). Vibration Threshold = 3 × free-run max, clamped
   #      [0.15, 0.45] g.
-  #   7. EVERY exit path (success, fail, homing bail-out, user abort in
-  #      Button 1) re-enables BOTH detectors — ship-safe posture.
+  #   7. EVERY exit path (success, fail, homing bail-out, thermal stop, user
+  #      abort via cal_abort) re-enables BOTH detectors — ship-safe posture.
   #
-  # Abort: Button 1 single-click (checked BEFORE Child Lock — stopping an
-  # autonomous multi-travel sequence is a safety control, never lockable).
+  # Abort: the cover's STOP from any source — web UI, Home Assistant, the API,
+  # Button 1 single-click (checked BEFORE Child Lock: stopping an autonomous
+  # multi-travel sequence is a safety control, never lockable) — or a user
+  # Open / Close / Set-position. All of them go through cal_abort.
   # ===========================================================================
   - id: auto_calibrate
     mode: single
@@ -1781,6 +1895,9 @@ script:
       - globals.set:
           id: cal_active
           value: 'true'
+      # Capture the user's vibration threshold before anything can abort, so an
+      # abort even during the announce puts back the right value.
+      - lambda: 'id(cal_vib_prev) = id(vib_threshold).state;'
       - globals.set:
           id: cal_done
           value: 'false'
@@ -1813,7 +1930,6 @@ script:
       # ---- 3. Detector posture ---------------------------------------------
       - switch.turn_off: stallguard_enabled
       - switch.turn_on: vib_enabled
-      - lambda: 'id(cal_vib_prev) = id(vib_threshold).state;'
       - number.set:
           id: vib_threshold
           value: !lambda |-
@@ -1843,7 +1959,7 @@ script:
                 if (spd < 100) spd = 100;
                 id(cal_budget_ms) = (uint32_t)(1000.0f * ${max_distance_steps} / (float)spd * 1.5f) + 10000;
                 id(cal_t0_ms) = millis();
-            - cover.close: glasscalibur_cover
+            - script.execute: drive_close
             - wait_until:
                 condition:
                   lambda: |-
@@ -1854,7 +1970,7 @@ script:
             binary_sensor.is_off: limit_switch_2
           then:
             # Could not even home — bail out safe.
-            - cover.stop: glasscalibur_cover
+            - script.execute: motion_halt
             - globals.set:
                 id: cal_result
                 value: '3'
@@ -2043,7 +2159,7 @@ script:
                 level: WARN
                 format: "CAL: thermal stop - motor %.1f degC (limit 55). Cool down, then re-run."
                 args: ['id(motor_temp).state']
-            - cover.stop: glasscalibur_cover
+            - script.execute: motion_halt
             - globals.set:
                 id: cal_result
                 value: '4'
@@ -2067,8 +2183,8 @@ script:
   # opening=false drives open→close (oracle: limit_switch_2). Each attempt
   # runs at CANDIDATES[cal_irun_index] and the leg climbs the ladder when:
   #   * the vibration detector declares a stall (it stops the motor and
-  #     drops global_state to 0; its auto-release also backs the mechanism
-  #     off ~8 mm, giving the next attempt a run-up at the sticky spot),
+  #     drops global_state to 0; there is no auto-release back-off during
+  #     calibration — the leg itself re-claims a full travel),
   #   * the sampler reports SG margin starvation (cal_escalate — escalates
   #     while still moving, before a violent stall develops),
   #   * the software step count "arrives" without the switch (silent step
@@ -2132,9 +2248,9 @@ script:
                 condition:
                   lambda: 'return opening;'
                 then:
-                  - cover.open: glasscalibur_cover
+                  - script.execute: drive_open
                 else:
-                  - cover.close: glasscalibur_cover
+                  - script.execute: drive_close
             - wait_until:
                 condition:
                   lambda: |-
@@ -2151,29 +2267,80 @@ script:
                   # ladder the while-condition ends the leg instead — a spot
                   # that still stalls at 19 is an obstruction or jam, never
                   # something to muscle through.
-                  - cover.stop: glasscalibur_cover
+                  - script.execute: motion_halt
                   - lambda: 'id(cal_irun_index) += 1;'
                   - delay: 300ms
       - lambda: |-
           id(cal_travel_ok) =
               opening ? id(limit_switch_1).state : id(limit_switch_2).state;
 
-  # Second half of the stall auto-release handshake (see on_stall and the
-  # vibration-stall interval). mode: restart so a second stall re-arms the
-  # 5 s window instead of leaving the flag set forever: if this logic lived
-  # inline in on_stall, a re-trigger during the delay would cancel the
-  # pending clear and stall_release_active would stay latched until reboot,
-  # silently disabling every future release.
-  - id: stall_release_clear
-    mode: restart
+  # The response to a stall that stopped a motion, shared by the TMC2209
+  # on_stall handler and the vibration-stall check (each has already stopped the
+  # motor and counted the trip). Stall auto-release: the leadscrew is not
+  # backdrivable, so a stall against an obstruction HOLDS whatever clamp force it
+  # reached until the motor reverses; back off ~8 mm so "stops while still
+  # clamping" becomes a genuine auto-reverse.
+  #
+  # The back-off is real movement, so it is reported as such: global_state and
+  # the cover show the direction the motor is actually travelling until it
+  # stops, and IDLE comes from the 200 ms completion poll on arrival (which also
+  # saves the position). Showing IDLE here would let Button 1 read the moving
+  # window as idle and start a close, back toward the obstruction.
+  #
+  # One release per event: stall_release_active stays set for the whole
+  # back-off (cleared by the poll, motion_halt, or the next user move), so a
+  # stall DURING the back-off just stops — jammed: don't oscillate back toward
+  # the first stall. During calibration there is no back-off: the leg stops and
+  # escalates on its own.
+  - id: stall_response
     then:
-      - delay: 5s
-      - globals.set:
-          id: stall_release_active
-          value: 'false'
-      - globals.set:
-          id: global_current_position
-          value: !lambda 'return id(driver)->current_position;'
+      - if:
+          condition:
+            lambda: 'return !id(cal_active) && !id(stall_release_active);'
+          then:
+            - lambda: |-
+                int32_t pos = id(driver)->current_position;
+                int32_t rel = ${stall_release_steps};
+                // Stalled while CLOSING (state 2): back off toward open.
+                // Otherwise back off toward close.
+                bool was_closing = (id(global_state) == 2);
+                int32_t tgt = was_closing ? pos + rel : pos - rel;
+                // Keep the target inside the travel: the limit switch must not
+                // be the only thing that stops an over-travel.
+                if (tgt < 0) tgt = 0;
+                if (tgt > ${max_distance_steps}) tgt = ${max_distance_steps};
+                id(stall_release_active) = true;
+                id(motion_start_ms) = millis();   // vibration launch mask for the reversal
+                id(vib_loud_count) = 0;           // the stall's judder is not new evidence
+                id(global_current_position) = pos;
+                id(global_state) = was_closing ? 1 : 2;
+                id(driver)->set_target(tgt);
+                ESP_LOGW("stall", "backing off to %d", (int) tgt);
+            - if:
+                condition:
+                  lambda: 'return id(global_state) == 1;'
+                then:
+                  - cover.template.publish:
+                      id: glasscalibur_cover
+                      current_operation: OPENING
+                else:
+                  - cover.template.publish:
+                      id: glasscalibur_cover
+                      current_operation: CLOSING
+          else:
+            # Calibrating (the leg recovers on its own), or a stall during a
+            # back-off (jammed): stay stopped.
+            - script.execute: motion_halt
+      # One "obstructed" event per stall that stops a motion, outside
+      # calibration (calibration probes stall on purpose). A jam during the
+      # back-off is a second stall, so it fires a second event.
+      - if:
+          condition:
+            lambda: 'return !id(cal_active);'
+          then:
+            - event.trigger:
+                id: obstruction_event
+                event_type: obstructed
 
   # StallGuard auto-tune — lower-direction cross-check, run from the on_stall
   # handler. Records that StallGuard fired this move, then (only when the
@@ -2233,8 +2400,9 @@ script:
 # Periodic intervals — motion completion, tamper check, vibration stall
 # -----------------------------------------------------------------------------
 # Three interval blocks run independently:
-#   1. 200 ms — detects natural OPENING/CLOSING -> IDLE transitions (target
-#               reached) and persists the final position to flash.
+#   1. 200 ms — refreshes the saved position while moving, detects natural
+#               OPENING/CLOSING -> IDLE transitions (target reached) and
+#               persists the final position.
 #   2. 1 s   — anti-tamper check; only runs while IDLE and tamper detection
 #               is enabled. Latches tamper_detected, flips state to TAMPERED,
 #               and fires the buzzer alarm script.
@@ -2244,6 +2412,11 @@ script:
 interval:
   - interval: 200ms
     then:
+      # Keep the saved position current while moving, so a reboot or power cut
+      # mid-travel restores (close to) where the motor stopped.
+      - lambda: |-
+          int s = id(global_state);
+          if (s == 1 || s == 2) id(global_current_position) = id(driver)->current_position;
       - if:
           condition:
             lambda: |-
@@ -2254,6 +2427,9 @@ interval:
             - globals.set:
                 id: global_state
                 value: "0"
+            - globals.set:
+                id: stall_release_active
+                value: 'false'
             - cover.template.publish:
                 id: glasscalibur_cover
                 current_operation: IDLE
@@ -2394,37 +2570,10 @@ interval:
                               id(sg_quiet_streak) = 0;
                               ESP_LOGW("sg_autotune", "vibration caught a stall StallGuard missed -> raising SGTHRS to %d", v);
                             }
-                  # Stall auto-release — same behavior as the StallGuard
-                  # on_stall path (the leadscrew holds clamp force until
-                  # reversed). Runs BEFORE global_state is zeroed: the stall
-                  # direction decides which way to back off. One release per
-                  # event via stall_release_active. This path stays live
-                  # during calibration (it is the calibration backstop); the
-                  # cal script's own cover.stop may truncate the back-off,
-                  # which is fine — the probe has already failed safe.
-                  - if:
-                      condition:
-                        lambda: 'return !id(stall_release_active);'
-                      then:
-                        - globals.set:
-                            id: stall_release_active
-                            value: 'true'
-                        - lambda: |-
-                            int32_t pos = id(driver)->current_position;
-                            int32_t rel = ${stall_release_steps};
-                            int32_t tgt = (id(global_state) == 2) ? pos + rel : pos - rel;
-                            if (tgt < 0) tgt = 0;
-                            id(driver)->set_target(tgt);
-                        - script.execute: stall_release_clear
-                  - globals.set:
-                      id: global_state
-                      value: "0"
-                  - cover.template.publish:
-                      id: glasscalibur_cover
-                      current_operation: IDLE
-                  - globals.set:
-                      id: global_current_position
-                      value: !lambda "return id(driver)->current_position;"
+                  # Back-off and state handling: stall_response (shared with
+                  # the StallGuard on_stall handler). This path stays live
+                  # during calibration — it is the calibration backstop.
+                  - script.execute: stall_response
                   - globals.set:
                       id: vib_loud_count
                       value: "0"

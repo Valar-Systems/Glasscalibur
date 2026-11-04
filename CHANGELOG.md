@@ -9,6 +9,37 @@ sensor). Local/branch builds report `dev`.
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Obstruction** event entity (event type `obstructed`): fires each time a
+  stall stops a motion outside calibration, whichever detector caught it. Home
+  Assistant automations can trigger on it directly. It needs a stall detector
+  on (both ship off until an auto-calibration enables them). The trip counters
+  stay.
+
+### Changed
+- A **STOP from any source** — web UI, Home Assistant, the API, Button 1 — now
+  ends a running auto-calibration, and so does a user Open / Close /
+  Set-position (which then makes its move). Calibration is left marked
+  "Aborted by user", with both stall detectors on and the vibration threshold
+  restored.
+- After a stall, the back-off is shown as the movement it is: State and the
+  cover report the real direction until the motor stops, then IDLE. The
+  back-off target stays inside the travel range, and a stall during a back-off
+  just stops.
+- The **motor stops when a firmware update begins**, however it was started.
+- A reboot mid-travel now keeps the position where the motor stopped, not
+  where the travel began.
+- Docs: web control URLs use the entity-name form, e.g.
+  `/cover/Glasscalibur/open`.
+- Build: ESPHome pinned to 2026.6.5 (the version v2.1.0 shipped with) and both
+  external components pinned to the commits v2.1.0 used.
+
+### Fixed
+- The unit no longer reboots every 15 minutes when no Home Assistant (native
+  API client) is connected.
+
 ## [2.1.0] - 2026-07-23
 
 ### Added

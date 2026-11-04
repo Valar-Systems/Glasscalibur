@@ -99,8 +99,11 @@ Entities/IDs added:
 - Triggers: GPIO21 **7 quick presses** (on_multi_click, presses ≤0.6 s each —
   deliberately hard to hit by accident, since calibration drives full travel;
   the 3–10 s hold on the same pin is Wi-Fi credential wipe — different timing,
-  must not overlap); Button 1 single-click **aborts** a running calibration
-  (also restores irun 19 and the saved vibration threshold); Button 1
+  must not overlap); a STOP from any source — Button 1 single-click, the
+  web UI, Home Assistant, the API, the 80 °C cutoff — **aborts** a running
+  calibration through `cal_abort` (also restores irun 19 and the saved
+  vibration threshold), and so does a user Open / Close / Set-position (which
+  then makes its move); Button 1
   double-click, the time schedules, the sun schedule, and the tamper check
   are all gated on `!cal_active` so nothing re-targets the stepper or
   latches tamper mid-sequence
@@ -234,17 +237,27 @@ From test protocol GC-TP-001 Rev A.1 (separate doc), still unimplemented:
   calibration — see §4.6.)
 - Calibration refusals (busy/tamper/hot) are log-only — no beep or status
   feedback for a user standing at the device.
-- No REMOTE abort: Button 1 is the only way to stop a running calibration.
-  A user watching from HA/web UI cannot stop the sequence (cover.stop only
-  fails the current probe; the script continues). Consider an "Abort
-  Calibration" button entity.
+- (Resolved: a STOP from any source, and any user Open / Close /
+  Set-position, now end a running calibration through `cal_abort`; the
+  firmware's own stops go through `motion_halt` and never end it.)
+- **Position after an interrupted calibration.** When a calibration is cut
+  short (STOP, a user move, a thermal stop, or a failed run), the step
+  counter may be off: each attempt of a leg re-claims a full travel from
+  wherever the previous attempt stopped. The counter is corrected the next
+  time the window reaches an end stop; until then a Close can stop short of
+  fully closed while reporting closed. Follow-up: after any interrupted
+  calibration, mark the position unknown and drive the next Open / Close to
+  its limit switch before trusting the counter.
+- **Position after a reboot mid-travel.** A soft reboot (Restart button, the
+  end of a firmware update) saves the stop point through `on_shutdown`, and
+  the saved position is refreshed every 200 ms while moving. A power cut,
+  crash or watchdog reset runs no shutdown, so it keeps only what ESPHome
+  last flushed to flash (at most once a minute): the restored position can
+  be up to a minute of travel old. Follow-up: after an unclean reset, boot
+  with the position marked unknown until the next end stop.
 - `cal_vib_prev` is volatile: a reboot mid-calibration leaves the raised
   0.60 g backstop in the Vibration Threshold number (still a working, just
   laxer, detector). Persist it (plus an in-cal flag) if this matters.
-- HA / web-UI cover commands are NOT gated during calibration (the template
-  cover actions can't tell the calibration script's own commands from a
-  user's). A mid-cal slider drag fails the probe safely via the limit-switch
-  oracle, but wastes minutes.
 - Accel readings quantize at ≈0.31–0.32 m/s² (~32 mg/LSB), which matches
   8-bit low-power output — NOT the 12-bit/2 mg "high resolution" the config
   requests (`resolution: high`). Suspect the Valar LIS2DH12 fork isn't
