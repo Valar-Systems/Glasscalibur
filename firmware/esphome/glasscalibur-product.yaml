@@ -62,9 +62,11 @@
 #   2 = CLOSING   driving toward 0
 #   3 = TAMPERED  tamper detected; alarm active or pending acknowledgement
 #
-#   OPENING/CLOSING return to IDLE via the 200 ms motion-completion poll,
-#   any cover stop_action (limit switch, temperature cutoff, manual stop),
-#   or the TMC2209 on_stall handler. TAMPERED is a *soft indicator* —
+#   OPENING/CLOSING return to IDLE via the 200 ms motion-completion poll
+#   (target reached — including the end of a stall back-off, which shows its
+#   real direction while it runs) or motion_halt (user STOP, limit switch,
+#   temperature cutoff, calibration, a stall during a back-off). TAMPERED is
+#   a *soft indicator* —
 #   subsequent motion commands override it; it only returns to IDLE on
 #   explicit acknowledgement (Button 1 single-click, "Clear Tamper Alert",
 #   or "Set Tamper Baseline").
@@ -190,8 +192,9 @@ globals:
   #   3 = TAMPERED tamper detected; cleared by "Clear Tamper Alert" or
   #                "Set Tamper Baseline" buttons. Tracks tamper_detected.
   # Mirrored to HA via the "State" text_sensor. Transitions back to IDLE
-  # happen on stop_action (which the limit switches and the temperature cutoff
-  # both fan into) and on the stepper's on_stall handler.
+  # happen in motion_halt (the user's STOP, the limit switches, calibration,
+  # a stall that just stops) and in the 200 ms completion poll (target reached,
+  # including the end of a stall back-off, which reports its real direction).
   - id: global_state
     type: int
     restore_value: no
@@ -388,8 +391,9 @@ globals:
     initial_value: '0'
 
   # Stall auto-release handshake. One back-off per stall event: set when a
-  # release starts, cleared by stall_release_clear 5 s later. A second stall
-  # while the flag is set just stops (jammed solid — don't oscillate).
+  # back-off starts and held until it ends (the completion poll, motion_halt,
+  # or the next user move clears it). A second stall while it is set just
+  # stops (jammed solid — don't oscillate).
   - id: stall_release_active
     type: bool
     restore_value: no
@@ -608,7 +612,7 @@ stepper:
           then:
             - stepper.stop: driver
             - lambda: 'id(stallguard_count) += 1;'
-            - logger.log: "MOTOR STALLED - backing off"
+            - logger.log: "MOTOR STALLED (StallGuard)"
             # Back-off and state handling: stall_response (shared with the
             # vibration-stall check).
             - script.execute: stall_response
@@ -977,6 +981,7 @@ cover:
           id(motion_start_ms) = millis();
           id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
           id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
       # Direction is inferred by comparing the new target to current_position.
       - if:
           condition:
@@ -1703,6 +1708,9 @@ script:
       - globals.set:
           id: global_state
           value: "0"
+      - globals.set:
+          id: stall_release_active
+          value: 'false'
       - cover.template.publish:
           id: glasscalibur_cover
           current_operation: IDLE
@@ -1750,6 +1758,7 @@ script:
           id(motion_start_ms) = millis();
           id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
           id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
       - globals.set:
           id: global_state
           value: "1"
@@ -1765,6 +1774,7 @@ script:
           id(motion_start_ms) = millis();
           id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
           id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
       - globals.set:
           id: global_state
           value: "2"
@@ -2156,8 +2166,8 @@ script:
   # opening=false drives open→close (oracle: limit_switch_2). Each attempt
   # runs at CANDIDATES[cal_irun_index] and the leg climbs the ladder when:
   #   * the vibration detector declares a stall (it stops the motor and
-  #     drops global_state to 0; its auto-release also backs the mechanism
-  #     off ~8 mm, giving the next attempt a run-up at the sticky spot),
+  #     drops global_state to 0; there is no auto-release back-off during
+  #     calibration — the leg itself re-claims a full travel),
   #   * the sampler reports SG margin starvation (cal_escalate — escalates
   #     while still moving, before a violent stall develops),
   #   * the software step count "arrives" without the switch (silent step
@@ -2252,53 +2262,58 @@ script:
   # motor and counted the trip). Stall auto-release: the leadscrew is not
   # backdrivable, so a stall against an obstruction HOLDS whatever clamp force it
   # reached until the motor reverses; back off ~8 mm so "stops while still
-  # clamping" becomes a genuine auto-reverse. The stall direction decides which
-  # way, so this runs BEFORE global_state is zeroed. One release per event: a
-  # second stall while stall_release_active is set (jammed solid) just stops.
+  # clamping" becomes a genuine auto-reverse.
+  #
+  # The back-off is real movement, so it is reported as such: global_state and
+  # the cover show the direction the motor is actually travelling until it
+  # stops, and IDLE comes from the 200 ms completion poll on arrival (which also
+  # saves the position). Showing IDLE here would let Button 1 read the moving
+  # window as idle and start a close, back toward the obstruction.
+  #
+  # One release per event: stall_release_active stays set for the whole
+  # back-off (cleared by the poll, motion_halt, or the next user move), so a
+  # stall DURING the back-off just stops — jammed: don't oscillate back toward
+  # the first stall. During calibration there is no back-off: the leg stops and
+  # escalates on its own.
   - id: stall_response
     then:
       - if:
           condition:
-            lambda: 'return !id(stall_release_active);'
+            lambda: 'return !id(cal_active) && !id(stall_release_active);'
           then:
-            - globals.set:
-                id: stall_release_active
-                value: 'true'
             - lambda: |-
                 int32_t pos = id(driver)->current_position;
                 int32_t rel = ${stall_release_steps};
                 // Stalled while CLOSING (state 2): back off toward open.
-                // Stalled while OPENING: back off toward close.
-                int32_t tgt = (id(global_state) == 2) ? pos + rel : pos - rel;
+                // Otherwise back off toward close.
+                bool was_closing = (id(global_state) == 2);
+                int32_t tgt = was_closing ? pos + rel : pos - rel;
+                // Keep the target inside the travel: the limit switch must not
+                // be the only thing that stops an over-travel.
                 if (tgt < 0) tgt = 0;
+                if (tgt > ${max_distance_steps}) tgt = ${max_distance_steps};
+                id(stall_release_active) = true;
+                id(motion_start_ms) = millis();   // vibration launch mask for the reversal
+                id(vib_loud_count) = 0;           // the stall's judder is not new evidence
+                id(global_current_position) = pos;
+                id(global_state) = was_closing ? 1 : 2;
                 id(driver)->set_target(tgt);
-            - script.execute: stall_release_clear
-      - globals.set:
-          id: global_state
-          value: "0"
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: IDLE
-      - globals.set:
-          id: global_current_position
-          value: !lambda "return id(driver)->current_position;"
-
-  # Second half of the stall auto-release handshake (see on_stall and the
-  # vibration-stall interval). mode: restart so a second stall re-arms the
-  # 5 s window instead of leaving the flag set forever: if this logic lived
-  # inline in on_stall, a re-trigger during the delay would cancel the
-  # pending clear and stall_release_active would stay latched until reboot,
-  # silently disabling every future release.
-  - id: stall_release_clear
-    mode: restart
-    then:
-      - delay: 5s
-      - globals.set:
-          id: stall_release_active
-          value: 'false'
-      - globals.set:
-          id: global_current_position
-          value: !lambda 'return id(driver)->current_position;'
+                ESP_LOGW("stall", "backing off to %d", (int) tgt);
+            - if:
+                condition:
+                  lambda: 'return id(global_state) == 1;'
+                then:
+                  - cover.template.publish:
+                      id: glasscalibur_cover
+                      current_operation: OPENING
+                else:
+                  - cover.template.publish:
+                      id: glasscalibur_cover
+                      current_operation: CLOSING
+          else:
+            # Calibrating (the leg recovers on its own), or a stall during a
+            # back-off (jammed): stay stopped.
+            - script.execute: motion_halt
 
   # StallGuard auto-tune — lower-direction cross-check, run from the on_stall
   # handler. Records that StallGuard fired this move, then (only when the
@@ -2385,6 +2400,9 @@ interval:
             - globals.set:
                 id: global_state
                 value: "0"
+            - globals.set:
+                id: stall_release_active
+                value: 'false'
             - cover.template.publish:
                 id: glasscalibur_cover
                 current_operation: IDLE
