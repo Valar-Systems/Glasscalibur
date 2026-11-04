@@ -556,3 +556,9 @@ Daniel present, fixed build, Slow, mid-travel away from the ends: start an updat
 device's own web page (the path the README gives customers). Expected: the motor stops
 within one main-loop pass of the update starting; the position after the reboot is the
 stop point ±1 %.
+
+## Amendment 5 — pointer (appended; nothing above was edited)
+
+A ruling of 2026-11-04 ~17:50Z, pasted into the working session by Daniel, is recorded
+outside this repository at its own instruction. It re-registers Ropener's P6.1 (see the
+Ropener predictions record); nothing in this file's checks changes.
