@@ -609,39 +609,9 @@ stepper:
             - stepper.stop: driver
             - lambda: 'id(stallguard_count) += 1;'
             - logger.log: "MOTOR STALLED - backing off"
-            # Stall auto-release: the leadscrew is not backdrivable, so a
-            # stall against an obstruction HOLDS whatever clamp force it
-            # reached until the motor reverses. Back off ~8 mm so "stops
-            # while still clamping" becomes genuine auto-reverse. Must run
-            # BEFORE global_state is zeroed below — the stall direction is
-            # what decides which way to back off. One release per event:
-            # a second stall while stall_release_active is set (jammed
-            # solid) just stops.
-            - if:
-                condition:
-                  lambda: 'return !id(stall_release_active);'
-                then:
-                  - globals.set:
-                      id: stall_release_active
-                      value: 'true'
-                  - lambda: |-
-                      int32_t pos = id(driver)->current_position;
-                      int32_t rel = ${stall_release_steps};
-                      // Stalled while CLOSING (state 2): back off toward open.
-                      // Stalled while OPENING: back off toward close.
-                      int32_t tgt = (id(global_state) == 2) ? pos + rel : pos - rel;
-                      if (tgt < 0) tgt = 0;
-                      id(driver)->set_target(tgt);
-                  - script.execute: stall_release_clear
-            - globals.set:
-                id: global_state
-                value: "0"
-            - cover.template.publish:
-                id: glasscalibur_cover
-                current_operation: IDLE
-            - globals.set:
-                id: global_current_position
-                value: !lambda "return id(driver)->current_position;"
+            # Back-off and state handling: stall_response (shared with the
+            # vibration-stall check).
+            - script.execute: stall_response
             # Record the fire and, if auto-tune is on, cross-check vibration to
             # decide whether this was a real stall or a false trip (see the
             # sg_autotune_eval script). Runs last so global_state/position are set.
@@ -2277,6 +2247,42 @@ script:
           id(cal_travel_ok) =
               opening ? id(limit_switch_1).state : id(limit_switch_2).state;
 
+  # The response to a stall that stopped a motion, shared by the TMC2209
+  # on_stall handler and the vibration-stall check (each has already stopped the
+  # motor and counted the trip). Stall auto-release: the leadscrew is not
+  # backdrivable, so a stall against an obstruction HOLDS whatever clamp force it
+  # reached until the motor reverses; back off ~8 mm so "stops while still
+  # clamping" becomes a genuine auto-reverse. The stall direction decides which
+  # way, so this runs BEFORE global_state is zeroed. One release per event: a
+  # second stall while stall_release_active is set (jammed solid) just stops.
+  - id: stall_response
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(stall_release_active);'
+          then:
+            - globals.set:
+                id: stall_release_active
+                value: 'true'
+            - lambda: |-
+                int32_t pos = id(driver)->current_position;
+                int32_t rel = ${stall_release_steps};
+                // Stalled while CLOSING (state 2): back off toward open.
+                // Stalled while OPENING: back off toward close.
+                int32_t tgt = (id(global_state) == 2) ? pos + rel : pos - rel;
+                if (tgt < 0) tgt = 0;
+                id(driver)->set_target(tgt);
+            - script.execute: stall_release_clear
+      - globals.set:
+          id: global_state
+          value: "0"
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: IDLE
+      - globals.set:
+          id: global_current_position
+          value: !lambda "return id(driver)->current_position;"
+
   # Second half of the stall auto-release handshake (see on_stall and the
   # vibration-stall interval). mode: restart so a second stall re-arms the
   # 5 s window instead of leaving the flag set forever: if this logic lived
@@ -2519,37 +2525,10 @@ interval:
                               id(sg_quiet_streak) = 0;
                               ESP_LOGW("sg_autotune", "vibration caught a stall StallGuard missed -> raising SGTHRS to %d", v);
                             }
-                  # Stall auto-release — same behavior as the StallGuard
-                  # on_stall path (the leadscrew holds clamp force until
-                  # reversed). Runs BEFORE global_state is zeroed: the stall
-                  # direction decides which way to back off. One release per
-                  # event via stall_release_active. This path stays live
-                  # during calibration (it is the calibration backstop); the
-                  # cal script's own cover.stop may truncate the back-off,
-                  # which is fine — the probe has already failed safe.
-                  - if:
-                      condition:
-                        lambda: 'return !id(stall_release_active);'
-                      then:
-                        - globals.set:
-                            id: stall_release_active
-                            value: 'true'
-                        - lambda: |-
-                            int32_t pos = id(driver)->current_position;
-                            int32_t rel = ${stall_release_steps};
-                            int32_t tgt = (id(global_state) == 2) ? pos + rel : pos - rel;
-                            if (tgt < 0) tgt = 0;
-                            id(driver)->set_target(tgt);
-                        - script.execute: stall_release_clear
-                  - globals.set:
-                      id: global_state
-                      value: "0"
-                  - cover.template.publish:
-                      id: glasscalibur_cover
-                      current_operation: IDLE
-                  - globals.set:
-                      id: global_current_position
-                      value: !lambda "return id(driver)->current_position;"
+                  # Back-off and state handling: stall_response (shared with
+                  # the StallGuard on_stall handler). This path stays live
+                  # during calibration — it is the calibration backstop.
+                  - script.execute: stall_response
                   - globals.set:
                       id: vib_loud_count
                       value: "0"
