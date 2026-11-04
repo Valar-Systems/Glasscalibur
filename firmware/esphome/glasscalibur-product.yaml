@@ -1013,6 +1013,23 @@ cover:
     # back to IDLE on target arrival, so these handlers are not needed at all.
 
 # -----------------------------------------------------------------------------
+# Obstruction event
+# -----------------------------------------------------------------------------
+# Fires "obstructed" each time a stall stops a motion outside calibration,
+# whichever detector caught it (StallGuard or the vibration check). Home
+# Assistant automations can trigger on it directly; the trip counters below
+# only refresh every 30 s. It needs a stall detector switched on: StallGuard and
+# Vibration Stall Detection both ship OFF until an auto-calibration enables them.
+event:
+  - platform: template
+    name: "Obstruction"
+    id: obstruction_event
+    event_types: ["obstructed"]
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_control
+
+# -----------------------------------------------------------------------------
 # Tunable number entities
 # -----------------------------------------------------------------------------
 # Each entity below is bound to a global (or directly to a chip register) and
@@ -2314,6 +2331,16 @@ script:
             # Calibrating (the leg recovers on its own), or a stall during a
             # back-off (jammed): stay stopped.
             - script.execute: motion_halt
+      # One "obstructed" event per stall that stops a motion, outside
+      # calibration (calibration probes stall on purpose). A jam during the
+      # back-off is a second stall, so it fires a second event.
+      - if:
+          condition:
+            lambda: 'return !id(cal_active);'
+          then:
+            - event.trigger:
+                id: obstruction_event
+                event_type: obstructed
 
   # StallGuard auto-tune — lower-direction cross-check, run from the on_stall
   # handler. Records that StallGuard fired this move, then (only when the
