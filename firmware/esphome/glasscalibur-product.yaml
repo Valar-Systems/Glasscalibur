@@ -50,8 +50,9 @@
 #   below) that defines the full travel between limits. Hitting a limit
 #   switch re-calibrates the stepper to a known absolute position (0 at the
 #   close end, max_distance_steps at the open end), correcting any drift.
-#   Position is persisted to flash at every IDLE transition so the cover
-#   survives reboots without re-homing.
+#   Position is saved at every IDLE transition, refreshed every 200 ms while
+#   moving, and captured once more at shutdown, so the cover survives reboots
+#   (including one mid-travel) without re-homing.
 #
 # -----------------------------------------------------------------------------
 # State machine (global_state, mirrored to the "State" text_sensor)
@@ -197,10 +198,12 @@ globals:
     initial_value: '0'
 
   # Last known stepper position in steps. Persisted so the cover entity
-  # survives reboots without re-homing. Saved at IDLE-transition points only
-  # (stop_action, on_stall, natural target arrival) to minimize flash writes —
-  # not in the 200 ms poll, despite Ropener doing so, since we don't need a
-  # per-tick checkpoint.
+  # survives reboots without re-homing. Saved at IDLE transitions (stop_action,
+  # on_stall, natural target arrival), refreshed by the 200 ms poll while moving
+  # (as the Ropener does), and captured from the driver at shutdown (on_shutdown
+  # below). It used to be saved at IDLE transitions only, so a reboot mid-travel
+  # restored the position the travel STARTED from. RAM-only per tick: ESPHome
+  # flushes changed globals to flash at most once a minute, and at shutdown.
   - id: global_current_position
     type: int
     restore_value: yes
@@ -485,6 +488,16 @@ esphome:
   # the board's motor_direction_default). Timezone / lat-long re-apply is done by
   # the scheduling mixin's priority -100 on_boot. This product adds only what core
   # can't know about: the current clamp and limit-switch homing.
+  # Capture where the motor actually is at every soft reboot (Restart button,
+  # end of a firmware update, any App.reboot). ESPHome runs on_shutdown hooks in
+  # reverse setup-priority order, so at priority 600 this runs before the
+  # globals store their values (800) and before the preference syncer flushes
+  # them to flash (1000) — the saved position is the stop point, not the start
+  # of the travel. A power cut skips shutdown; the 200 ms refresh covers that.
+  on_shutdown:
+    - priority: 600
+      then:
+        - lambda: 'id(global_current_position) = id(driver)->current_position;'
   on_boot:
     # BEFORE core configures the driver (core boots at priority 600): clamp the
     # restored motor current. Units upgraded from firmware that allowed irun up to
@@ -2250,8 +2263,9 @@ script:
 # Periodic intervals — motion completion, tamper check, vibration stall
 # -----------------------------------------------------------------------------
 # Three interval blocks run independently:
-#   1. 200 ms — detects natural OPENING/CLOSING -> IDLE transitions (target
-#               reached) and persists the final position to flash.
+#   1. 200 ms — refreshes the saved position while moving, detects natural
+#               OPENING/CLOSING -> IDLE transitions (target reached) and
+#               persists the final position.
 #   2. 1 s   — anti-tamper check; only runs while IDLE and tamper detection
 #               is enabled. Latches tamper_detected, flips state to TAMPERED,
 #               and fires the buzzer alarm script.
@@ -2261,6 +2275,11 @@ script:
 interval:
   - interval: 200ms
     then:
+      # Keep the saved position current while moving, so a reboot or power cut
+      # mid-travel restores (close to) where the motor stopped.
+      - lambda: |-
+          int s = id(global_state);
+          if (s == 1 || s == 2) id(global_current_position) = id(driver)->current_position;
       - if:
           condition:
             lambda: |-
