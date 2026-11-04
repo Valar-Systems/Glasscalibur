@@ -162,11 +162,15 @@
 # - valar-systems: Valar fork of latonita's draft LIS2DH12 PR (esphome#14788)
 #   with four fixes — stale-sample guard, throttled loop() reads, optional
 #   data-ready interrupt pin, and on-chip high-pass filter support.
+# Both pinned to the exact commits v2.1.0 was built from (each was its repo's
+# head at release time), so a rebuild is reproducible. Unpinned, they followed
+# whatever each default branch held on build day. slimcdk is the same commit
+# valar-core pins. Bump only deliberately, with the regression gate.
 external_components:
-  - source: github://slimcdk/esphome-custom-components
+  - source: github://slimcdk/esphome-custom-components@b5f0e44ae8732f68b9bbeaed9e962ca052d04cdb
     components: [tmc2209_hub, tmc2209, stepper]
 
-  - source: github://Valar-Systems/esphome-lis2dh12
+  - source: github://Valar-Systems/esphome-lis2dh12@f9cbb99993f8ecee9e224e94e19a23b8aaf8e445
     components: [lis2dh12_base, lis2dh12_i2c]
 
 globals:
