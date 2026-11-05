@@ -40,7 +40,9 @@ GPIO14 DIAG→on_stall, GPIO15 open limit, GPIO19/20 I2C, GPIO21 calibration /
 Wi-Fi-reset button, GPIO23 Button 1.
 
 State machine `global_state`: 0 IDLE · 1 OPENING · 2 CLOSING · 3 TAMPERED.
-Cover `open_action` targets `${max_distance_steps}`; `close_action` targets 0.
+Cover `open_action` targets the learned open stroke + 0.5 mm (101.0 mm before
+anything is learned) and stops on the open switch; `close_action` targets
+-0.6 mm and stops on the close switch (see "Learned open limit" below).
 
 ## 3. What v1.3.0 added (the code you're working on)
 
@@ -89,9 +91,10 @@ Entities/IDs added:
 - Substitutions: `cal_sg_floor: "80"`, `cal_vib_backstop: "0.45"`,
   `stall_release_steps: "24500"` (≈8 mm at 3066.7 steps/mm — measured from
   CAD 2026-07-10: **Tr6×1 leadscrew, 12T:23T motor→screw reduction**,
-  stroke 111.3 mm = 341387 steps, ram speed 0.82 mm/s at speed 2500;
+  CAD stroke 111.3 mm (the old fixed `max_distance_steps` 341387, removed
+  in favour of the learned open limit), ram speed 0.82 mm/s at speed 2500;
   OPEN-2 closed). There is deliberately **no fixed
-  travel timeout**: a full travel is `max_distance_steps/global_max_speed`
+  travel timeout**: a full travel is (101.0 mm × steps_per_mm)/global_speed
   (≈228 s at the default 1500 steps/s, speed user-tunable 100..10000), so
   the old `cal_travel_timeout: 90s` expired mid-travel and failed every
   healthy probe. Each travel instead arms `cal_t0_ms`/`cal_budget_ms` from
@@ -129,7 +132,7 @@ Entities/IDs added:
    for the run (the user's value is itself a calibration output and may be
    mistuned); `cal_vib_prev` remembers the original for fail/abort restore.
 4. Home to close limit at irun 19. Homing (and every re-home) first does
-   `stepper.report_position: ${max_distance_steps}` — the saved position can
+   `stepper.report_position:` the open target — the saved position can
    lie after skipped steps, so claim full-open and let the close command
    cover the whole travel; the limit switch re-syncs to 0 on arrival.
    Skipped entirely when the close limit is already pressed (the switch
@@ -227,12 +230,8 @@ From test protocol GC-TP-001 Rev A.1 (separate doc), still unimplemented:
   lockout for NORMAL motion (cal gate already exists), and using the TMP1075
   **ALERT pin (GPIO18, wired, unused)** as an interrupt backstop.
 - Possible: auto-recalibrate suggestion when rolling SG stats drift.
-- Possible: measure TRUE close→open travel during a no-escalation open leg
-  (capture `current_position` in limit_1's on_press before the resync) and
-  report it — the configured `max_distance_steps` (341387) overshoots the
-  physical travel by ~2-3k steps on the test unit, and that overshoot is
-  what ground the end-stop through the dead-switch era (suspected origin of
-  the leadscrew end-zone damage found 2026-07-10).
+- (Done: the open stroke is now measured and learned — see "Learned open
+  limit". The old fixed `max_distance_steps` (341387) overshoot is gone.)
 - (Resolved: TCOOLTHRS is now derived from measured cruise TSTEP by
   calibration — see §4.6.)
 - Calibration refusals (busy/tamper/hot) are log-only — no beep or status
@@ -282,3 +281,48 @@ older firmware).
   `script.stop`; `deceleration: inf` (instant stop) is intentional;
   `ihold: 0` + `standstill_mode: freewheeling` is intentional (zero idle
   heating) — never add holding current.
+
+## Learned open limit (v2.2.0)
+
+All distances are from the close switch (S5) trigger = 0, at `steps_per_mm`
+3066.6667 (Tr6×1 leadscrew, 12T:23T). Constants live in the board wrapper.
+
+- **Learning.** S5 re-zeroing the counter marks a *fresh home*. The next open
+  (`drive_open`: Open, Set-position 100 %, a schedule, or calibration's open
+  leg on its first attempt) is a *learning open* unless a stall (StallGuard or
+  vibration) happens first. When S4 triggers on a learning open, its count is
+  the stroke: accepted only between `open_learn_min_mm` 94.0 and
+  `open_learn_max_mm` 101.0 mm, else the fault *open switch position out of
+  range* and the previous value stays. An accepted value is stored in
+  `open_stroke_steps` (persisted) only when it moves by more than
+  `open_persist_delta_mm` 0.05 mm, so routine opens don't write flash.
+- **Targets.** Open = stroke + `open_margin_mm` 0.5 mm (`open_default_mm`
+  101.0 mm before anything is learned). Close = −`close_overtravel_mm` 0.6 mm.
+  The cover's 0..1 position is scaled to the stroke (101.0 mm before learning).
+- **S4 press.** Stops at once (deceleration `inf`: VACTUAL 0, no ramp), logs the
+  trigger count, then learns — only a press that comes *while opening* on a
+  learning open — or re-syncs the counter to the learned stroke (drift
+  correction; to `open_default_mm` before anything is learned, which can only
+  over-estimate the position, so a following close runs long and S5 stops it).
+  An out-of-range learning does not re-sync. 300 ms later `s4_coast_report` logs
+  where the motor stopped and the coast — WARN above `coast_limit_mm` 0.3 mm.
+- **After an update from older firmware** the saved counter is still on the
+  old 111 mm scale (S4 used to re-sync to 341387), so until the first full
+  close an open can stop short and report *open limit switch not detected*.
+  One full close re-zeroes it; the next open learns the stroke.
+- **Faults** (diagnostic text sensor **Fault**, each logged at WARN): *open
+  switch position out of range*; *open limit switch not detected* (an open
+  reached its target with S4 released — stopped there, no re-zero, closing
+  still allowed); *close limit switch not detected* (a close reached −0.6 mm
+  with S5 released — stopped). Not raised during calibration, whose legs treat
+  "count arrived, no switch" as step loss and escalate. Cleared by the next
+  accepted learning / S4 press / S5 press; a reboot clears all.
+- **Logs** (tag `limit`): `Open stroke … ; open target …` at INFO on every
+  open; `S4 triggered at N steps (X mm)`; `Open stroke learned / confirmed …`;
+  `S4 re-sync: counter A -> B steps`; `S4 stop: motor stopped at N steps,
+  coast C steps (X mm)`.
+- **Diagnostic sensor** **Open stroke** (mm, 2 decimals; unknown until learned).
+- **StallGuard Enabled** now defaults ON (the backstop if a switch dies before
+  the stroke is learned). Caveat: with core's default TCOOLTHRS (100) the chip
+  only reports stalls near the Fast preset (cruise TSTEP ≈ 375000/speed: Slow
+  ≈ 312, Medium ≈ 144, Fast ≈ 68) until an auto-calibration sets TCOOLTHRS.
