@@ -1179,8 +1179,9 @@ cover:
 # Fires "obstructed" each time a stall stops a motion outside calibration,
 # whichever detector caught it (StallGuard or the vibration check). Home
 # Assistant automations can trigger on it directly; the trip counters below
-# only refresh every 30 s. It needs a stall detector switched on: StallGuard and
-# Vibration Stall Detection both ship OFF until an auto-calibration enables them.
+# only refresh every 30 s. It needs a stall detector switched on: StallGuard
+# ships ON; Vibration Stall Detection ships OFF until an auto-calibration
+# enables it.
 event:
   - platform: template
     name: "Obstruction"
@@ -1422,9 +1423,11 @@ switch:
   # always set to the user's chosen value (via the SGTHRS number entity), so
   # the chip detects stalls regardless of this switch. The on_stall handler
   # on the stepper is what's gated by this switch — when OFF, stall events
-  # fire but are ignored, so a misconfigured threshold can't spuriously stop
-  # the motor. Defaults OFF because SGTHRS needs per-installation tuning
-  # before stall response can be trusted.
+  # fire but are ignored. Defaults ON: it is the backstop that stops the motor
+  # if a limit switch dies before the open stroke has been learned. A unit that
+  # already stored a setting keeps it. Note the chip only reports stalls while
+  # TSTEP <= TCOOLTHRS: core's default TCOOLTHRS (100) arms it only near Fast
+  # until an auto-calibration sets TCOOLTHRS from the measured cruise TSTEP.
   - platform: template
     name: "StallGuard Enabled"
     id: stallguard_enabled
@@ -1433,7 +1436,7 @@ switch:
       sorting_weight: 1
       sorting_group_id: group_sg_adv
     optimistic: true
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_mode: RESTORE_DEFAULT_ON
     turn_on_action:
       - logger.log: "StallGuard handler enabled"
     turn_off_action:
