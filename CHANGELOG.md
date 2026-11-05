@@ -20,6 +20,18 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   both the new carriage (switch near 99.3 mm) and the old one (~95.5 mm).
   The learned value is saved, and flash is written only when it moves by more
   than 0.05 mm.
+- **Uncalibrated fail-safe.** Until a calibration has completed successfully
+  on the unit, every move (open, close, Button 1, schedules, Home Assistant)
+  runs at the Fast preset whatever the speed setting, because that is where
+  the driver's default StallGuard threshold detects stalls. The web UI shows
+  **Calibration Notice** ("Not calibrated - run Calibrate") at the top of
+  Control and **Speed Lock** ("Speed locked to Fast until calibration has
+  run") under the Speed setting; the diagnostic binary sensor **StallGuard
+  calibrated** shows the state to Home Assistant. Once a calibration succeeds
+  the speed setting applies. A later calibration that fails or is aborted keeps
+  the last good one (including its motor current) and logs a warning with the
+  reason. Units already calibrated with an earlier version count as calibrated.
+  Calibration itself still runs at the speed setting, which it tunes for.
 - **Open stroke** diagnostic sensor (mm): the learned open switch position,
   also logged on every open.
 - **Fault** diagnostic text sensor: *open switch position out of range*,
