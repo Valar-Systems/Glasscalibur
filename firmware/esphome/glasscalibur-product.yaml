@@ -461,6 +461,15 @@ globals:
     type: bool
     restore_value: yes
     initial_value: 'false'
+  # The speed (steps/s) the last successful calibration ran at — the speed its
+  # StallGuard tune is valid for. 0 = not recorded (never calibrated, or
+  # calibrated by a firmware that did not record it: set at boot from the saved
+  # speed setting). When the setting differs, moves run at this speed until a
+  # calibration at the new setting succeeds (see effective_speed).
+  - id: cal_speed
+    type: int
+    restore_value: yes
+    initial_value: '0'
 
   # Stall auto-release handshake. One back-off per stall event: set when a
   # back-off starts and held until it ends (the completion poll, motion_halt,
@@ -662,11 +671,21 @@ esphome:
               id(sg_calibrated) = true;
               ESP_LOGI("cal", "Earlier successful calibration found - StallGuard calibrated");
             }
+            // Calibrated before the calibrated speed was recorded (carried over
+            // from older firmware): the saved speed setting is the calibrated speed.
+            if (id(sg_calibrated) && id(cal_speed) == 0) {
+              id(cal_speed) = id(global_speed);
+              ESP_LOGI("cal", "Calibrated speed not recorded yet - treating the saved speed %d steps/s as "
+                       "the calibrated speed (calibration recorded %d)", id(global_speed), id(cal_speed_at));
+            }
             if (!id(sg_calibrated))
               ESP_LOGI("cal", "Not calibrated - speed locked to Fast until calibration has run");
+            else if (id(global_speed) != id(cal_speed))
+              ESP_LOGW("cal", "Speed setting %d differs from the calibrated speed %d - running at %d "
+                       "until a calibration at the new speed", id(global_speed), id(cal_speed), id(cal_speed));
         - stepper.set_speed:
             id: driver
-            speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};"
+            speed: !lambda "return ${effective_speed};"
 
 # -----------------------------------------------------------------------------
 # Buzzer (passive piezo on GPIO5, driven by ledc PWM)
@@ -1195,7 +1214,7 @@ cover:
                             current_operation: CLOSING
                   - stepper.set_speed:
                       id: driver
-                      speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};"
+                      speed: !lambda "return ${effective_speed};"
                   - stepper.set_target:
                       id: driver
                       target: !lambda |-
@@ -1251,7 +1270,7 @@ number:
     # Appended after core's own set_action (which stores the value and pushes it
     # to the driver): until a calibration has succeeded the driver stays at Fast.
     set_action:
-      - stepper.set_speed: { id: driver, speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};" }
+      - stepper.set_speed: { id: driver, speed: !lambda "return ${effective_speed};" }
   - id: !extend num_accel
     web_server: { sorting_weight: 2, sorting_group_id: group_tuning }
 
@@ -1520,8 +1539,10 @@ select:
   # cross the band transiently, which is harmless). Like Motor Direction on other
   # boards this holds no state of its own — it reads/writes global_speed (the
   # single source of truth, restored on boot). The raw Speed slider lives in the
-  # advanced group. Changing speed re-flags the StallGuard calibration as stale
-  # automatically (SG_RESULT is speed-dependent; see Calibration Status).
+  # advanced group. SG_RESULT is speed-dependent, so after a calibration moves
+  # keep running at the calibrated speed (cal_speed) when the setting is changed,
+  # until a calibration at the new setting succeeds (Speed Lock / Calibration
+  # Status say so).
   - platform: template
     name: "Speed"
     id: sel_speed
@@ -1543,7 +1564,7 @@ select:
           id(global_speed) = s;
       # The setting is stored either way; the driver stays at Fast until a
       # calibration has succeeded (see sg_calibrated).
-      - stepper.set_speed: { id: driver, speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};" }
+      - stepper.set_speed: { id: driver, speed: !lambda "return ${effective_speed};" }
       - lambda: |-
           // Persist immediately so the choice survives an unplug seconds later.
           global_speed->update();
@@ -1899,8 +1920,17 @@ text_sensor:
       sorting_group_id: group_tuning
     update_interval: 5s
     lambda: |-
-      if (id(sg_calibrated)) return {"Not locked"};
-      return {"Speed locked to Fast until calibration has run"};
+      if (!id(sg_calibrated)) return {"Speed locked to Fast until calibration has run"};
+      const int cs = id(cal_speed);
+      if (cs > 0 && id(global_speed) != cs) {
+        // Name the calibrated speed: the preset when it is one, else the number.
+        const char *name = cs == 1200 ? "Slow" : cs == 2600 ? "Medium" : cs == ${speed_fast} ? "Fast" : nullptr;
+        char buf[96];
+        if (name) snprintf(buf, sizeof(buf), "Speed change needs recalibration - running at %s (%d steps/s)", name, cs);
+        else snprintf(buf, sizeof(buf), "Speed change needs recalibration - running at %d steps/s", cs);
+        return {std::string(buf)};
+      }
+      return {"Not locked"};
 
   # (Firmware Version, Board, and the IP/SSID/MAC wifi_info sensors come from
   # core — core owns firmware_version_text and publishes it in on_boot.)
@@ -1946,7 +1976,9 @@ text_sensor:
           return {"Not calibrated"};
       }
       std::string s = buf;
-      if (id(cal_speed_at) != 0 && id(cal_speed_at) != id(global_speed)) {
+      // STALE against the calibrated speed now in force (cal_speed): moves run at
+      // that speed until a calibration at the new setting succeeds.
+      if (id(cal_speed) != 0 && id(cal_speed) != id(global_speed)) {
         s += " | STALE - speed changed, recalibrate";
       }
       return {s};
@@ -2073,7 +2105,7 @@ script:
       # user's speed — it tunes StallGuard there).
       - stepper.set_speed:
           id: driver
-          speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};"
+          speed: !lambda "return ${effective_speed};"
       - stepper.set_target:
           id: driver
           target: !lambda |-
@@ -2101,7 +2133,7 @@ script:
           value: "2"
       - stepper.set_speed:
           id: driver
-          speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};"
+          speed: !lambda "return ${effective_speed};"
       - stepper.set_target:
           id: driver
           target: !lambda "return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});"
@@ -2395,6 +2427,9 @@ script:
                 // Calibrated on this unit: the user's speed applies from now on
                 // (never cleared by a later failed calibration).
                 id(sg_calibrated)     = true;
+                // The tune is valid for this speed; moves run at it until a
+                // calibration at another speed succeeds.
+                id(cal_speed)         = id(global_speed);
                 // Arm StallGuard at the operating speed: the chip only
                 // asserts stalls while TSTEP < TCOOLTHRS, so derive the
                 // threshold from measured cruise TSTEP (×1.5 keeps the
@@ -2453,7 +2488,7 @@ script:
           then:
             - stepper.set_speed:
                 id: driver
-                speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};"
+                speed: !lambda "return ${effective_speed};"
             - logger.log: "CAL: StallGuard calibrated - the speed setting applies"
             - component.update: speed_lock_text
             - component.update: cal_notice_text
@@ -2477,8 +2512,8 @@ script:
           if (id(sg_calibrated)) {
             if (id(cal_irun_chosen) > 0) id(global_irun) = id(cal_irun_chosen);
             ESP_LOGW("cal", "CAL: %s - keeping the last good calibration "
-                     "(irun=%d SGTHRS=%d TCOOLTHRS=%d)", reason.c_str(), id(global_irun),
-                     id(global_sgthrs), id(global_tcoolthrs));
+                     "(irun=%d SGTHRS=%d TCOOLTHRS=%d, calibrated speed %d steps/s)", reason.c_str(),
+                     id(global_irun), id(global_sgthrs), id(global_tcoolthrs), id(cal_speed));
           } else {
             id(global_irun) = 19;
             ESP_LOGW("cal", "CAL: %s - unit stays uncalibrated; speed stays locked to Fast",
@@ -2488,7 +2523,7 @@ script:
           irun: !lambda 'return id(global_irun);'
       - stepper.set_speed:
           id: driver
-          speed: !lambda "return (id(sg_calibrated) || id(cal_active)) ? id(global_speed) : ${speed_fast};"
+          speed: !lambda "return ${effective_speed};"
       - component.update: speed_lock_text
       - component.update: cal_notice_text
 
