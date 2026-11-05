@@ -37,9 +37,12 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   changed afterwards, moves keep running at the calibrated speed and **Speed
   Lock** reads "Speed change needs recalibration - running at <speed>" until a
   calibration at the new speed succeeds; Calibration Status shows STALE meanwhile.
-  Units calibrated with an earlier version take their current speed setting as
-  the calibrated speed (logged at startup). Nothing in the firmware changes the
-  speed on its own (no quiet or night speed; schedules only open and close).
+  Units calibrated with an earlier version use the speed that calibration
+  recorded (logged at startup); only if none was recorded is the current speed
+  setting assumed. **Some updated units may therefore go back to the speed they
+  were calibrated at** (shown under the Speed control) until they recalibrate at
+  their current speed. Nothing in the firmware changes the speed on its own (no
+  quiet or night speed; schedules only open and close).
 - **Open stroke** diagnostic sensor (mm): the learned open switch position,
   also logged on every open.
 - **Fault** diagnostic text sensor: *open switch position out of range*,
