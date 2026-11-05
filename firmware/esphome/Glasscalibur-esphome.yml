@@ -45,6 +45,12 @@ substitutions:
   # succeeded on this unit: the driver's default StallGuard threshold (TCOOLTHRS
   # 100) only reports stalls near this speed (cruise TSTEP ≈ 375000/speed ≈ 68).
   speed_fast: "5500"
+  # The speed every move actually runs at (C++ expression, used by every speed
+  # setter in the product): during a calibration the user's setting (calibration
+  # tunes StallGuard for it); not yet calibrated -> Fast; calibrated -> the speed
+  # the last successful calibration ran at (cal_speed), which equals the setting
+  # unless the setting was changed since.
+  effective_speed: "(id(cal_active) ? id(global_speed) : (!id(sg_calibrated) ? ${speed_fast} : (id(cal_speed) > 0 ? id(cal_speed) : id(global_speed))))"
   stepper_config_dump: "false"
   motor_direction_default: "COUNTERCLOCKWISE"
 
