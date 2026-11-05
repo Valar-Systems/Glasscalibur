@@ -356,8 +356,11 @@ written by that success branch, so a nonzero value sets the flag once.
 `cal_speed` (persisted, 0 = not recorded) holds the speed the last successful
 calibration ran at — the only speed its StallGuard tune is valid for. It is set
 in the success branch next to `cal_speed_at`; a failed calibration keeps it. A
-calibrated unit with `cal_speed` 0 (calibrated by older firmware) takes its saved
-speed setting as the calibrated speed at boot, logged at INFO.
+calibrated unit with `cal_speed` 0 (calibrated by older firmware) takes the speed
+that calibration recorded (`cal_speed_at`) at boot, logged at INFO — a setting
+changed since is then an ordinary mismatch (runs at the recorded speed, Speed
+Lock notice, STALE). Only with no recorded speed is the current setting assumed
+(logged at WARN).
 
 The effective speed (substitution `effective_speed`, every speed setter): the
 setting while a calibration runs; Fast until calibrated; otherwise `cal_speed`.

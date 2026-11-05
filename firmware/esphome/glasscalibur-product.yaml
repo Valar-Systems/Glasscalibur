@@ -671,12 +671,22 @@ esphome:
               id(sg_calibrated) = true;
               ESP_LOGI("cal", "Earlier successful calibration found - StallGuard calibrated");
             }
-            // Calibrated before the calibrated speed was recorded (carried over
-            // from older firmware): the saved speed setting is the calibrated speed.
+            // Calibrated by older firmware (cal_speed not yet recorded): the speed
+            // that calibration recorded (cal_speed_at, same success branch) is the
+            // speed its StallGuard tune is valid for. A setting changed since then
+            // is an ordinary mismatch: moves run at the recorded speed until a
+            // calibration at the new setting succeeds. Only with no recorded speed
+            // is the current setting assumed.
             if (id(sg_calibrated) && id(cal_speed) == 0) {
-              id(cal_speed) = id(global_speed);
-              ESP_LOGI("cal", "Calibrated speed not recorded yet - treating the saved speed %d steps/s as "
-                       "the calibrated speed (calibration recorded %d)", id(global_speed), id(cal_speed_at));
+              if (id(cal_speed_at) != 0) {
+                id(cal_speed) = id(cal_speed_at);
+                ESP_LOGI("cal", "Calibrated speed from the earlier calibration: %d steps/s "
+                         "(speed setting %d)", id(cal_speed_at), id(global_speed));
+              } else {
+                id(cal_speed) = id(global_speed);
+                ESP_LOGW("cal", "No speed recorded with the earlier calibration - assumed the current "
+                         "setting %d steps/s as the calibrated speed", id(global_speed));
+              }
             }
             if (!id(sg_calibrated))
               ESP_LOGI("cal", "Not calibrated - speed locked to Fast until calibration has run");
