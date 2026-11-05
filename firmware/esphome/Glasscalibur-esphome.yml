@@ -41,6 +41,10 @@ substitutions:
   stepper_deceleration: "inf"          # immediate stop
   stepper_max_speed: "5500 steps/s"
   stepper_acceleration: "100 steps/s^2"
+  # The Fast speed preset. Also the speed every move uses until a calibration has
+  # succeeded on this unit: the driver's default StallGuard threshold (TCOOLTHRS
+  # 100) only reports stalls near this speed (cruise TSTEP ≈ 375000/speed ≈ 68).
+  speed_fast: "5500"
   stepper_config_dump: "false"
   motor_direction_default: "COUNTERCLOCKWISE"
 
