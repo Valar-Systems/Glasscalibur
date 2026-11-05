@@ -132,3 +132,31 @@ G2 Behaviour gate, base -> head:
 - L5 A reboot keeps the learned value; a repeat open within 0.05 mm logs "not
   saved".
 - L6 Old carriage: learns ~95.5 mm and opens to ~96.0 mm.
+
+## Amendment 1 — self-review fixes, before the code changes (appended; nothing above was edited)
+
+The checks above were run on the first implementation (results in the PR). A
+review of that code found two defects in the design as written; both are fixed
+before the PR opens, and the checks re-run on the fixed head.
+
+1. A learning open could teach from the wrong press. `learn_this_open` survived
+   a user STOP and an arrival without S4, so a later S4 press while idle (an
+   intermittent switch at the 101.0 mm target, say) would have been taken as the
+   stroke, and 101.0 mm is inside the accepted range. Fix: learning needs the S4
+   press to come while OPENING (captured before the stop), every S4 press ends
+   the learning open, and the completion poll clears it on arrival.
+2. Before anything is learned, an S4 press that is not a learning open left the
+   counter as it was. A unit whose counter is low (a fresh unit with counter 0
+   while the window is part-open, for example) then ran a close short of S5 and
+   raised a false "close limit switch not detected" mid-travel. Fix: with
+   nothing learned, S4 re-syncs the counter to open_default_mm (101.0 mm), as
+   today's S4 re-syncs to 341387. That over-estimates the position, so a close
+   runs long and S5 stops it; the next open from that home learns.
+
+Known behaviour after an update from older firmware (documented, not changed):
+the saved counter was kept on the old 111 mm scale (S4 re-synced to 341387), so
+until the first full close an open can stop short and report "open limit switch
+not detected". One full close re-zeroes it.
+
+Checks: C1, S1-S3, G1, G2 re-run on the fixed head with unchanged predictions
+(the fixes stay inside anchors already listed as CHANGED; one new global).
