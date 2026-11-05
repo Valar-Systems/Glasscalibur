@@ -9,16 +9,42 @@ sensor). Local/branch builds report `dev`.
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [2.2.0] - unreleased
 
 ### Added
+- **Learned open limit.** The open switch position is learned per unit: each
+  open that starts from a fresh close-switch home, with no stall on the way,
+  records where the open switch triggers (accepted between 94.0 and 101.0 mm
+  from the close switch). The open then drives to that position + 0.5 mm
+  (101.0 mm before anything is learned) and stops on the switch. Works with
+  both the new carriage (switch near 99.3 mm) and the old one (~95.5 mm).
+  The learned value is saved, and flash is written only when it moves by more
+  than 0.05 mm.
+- **Open stroke** diagnostic sensor (mm): the learned open switch position,
+  also logged on every open.
+- **Fault** diagnostic text sensor: *open switch position out of range*,
+  *open limit switch not detected* (an open reached its target without the
+  switch: it stops there and the position is not re-zeroed; closing still
+  works) and *close limit switch not detected* (a close ran 0.6 mm past zero
+  without the switch: it stops). Each is logged as a warning.
+- The log shows the step count when the open switch triggers and where the
+  motor stopped, so the coast past the switch is visible.
 - **Obstruction** event entity (event type `obstructed`): fires each time a
   stall stops a motion outside calibration, whichever detector caught it. Home
   Assistant automations can trigger on it directly. It needs a stall detector
-  on (both ship off until an auto-calibration enables them). The trip counters
-  stay.
+  on (StallGuard now ships on; vibration detection ships off until an
+  auto-calibration enables it). The trip counters stay.
 
 ### Changed
+- The open no longer drives toward the old fixed 111 mm end of travel; a close
+  runs at most 0.6 mm past zero before stopping on the close switch.
+- **StallGuard Enabled** now defaults on for units that have never stored a
+  setting, as the backstop if a limit switch fails before the open position
+  is learned. Units that already stored a setting keep it.
+- After updating from an earlier version, the first open may stop short and
+  report *open limit switch not detected* (positions saved by older firmware
+  used the old 111 mm scale). One full close fixes it; the next open learns
+  the open position.
 - A **STOP from any source** — web UI, Home Assistant, the API, Button 1 — now
   ends a running auto-calibration, and so does a user Open / Close /
   Set-position (which then makes its move). Calibration is left marked
@@ -143,6 +169,7 @@ auto-calibration sequence) live in the product layer.
 - Wi-Fi provisioning with no hardcoded credentials (fallback hotspot + captive
   portal, Improv over USB serial).
 
+[2.2.0]: https://github.com/Valar-Systems/Glasscalibur/compare/v2.1.0...main
 [2.1.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.0.0
 [1.2.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.2.0
