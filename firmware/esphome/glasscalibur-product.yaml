@@ -41,15 +41,19 @@
 # -----------------------------------------------------------------------------
 # Position / motion model
 # -----------------------------------------------------------------------------
-#   Steps are the canonical position unit. The cover entity reports position
-#   as a 0..1 ratio of current_position / max_distance_steps:
+#   Steps are the canonical position unit, counted from the close switch (S5)
+#   trigger = 0 at steps_per_mm (board wrapper). The cover entity reports
+#   position as a 0..1 ratio of the open stroke:
 #
-#       position = current_position / max_distance_steps     (0.0 .. 1.0)
+#       position = current_position / stroke                  (0.0 .. 1.0)
 #
-#   max_distance_steps is a compile-time substitution (see `substitutions:`
-#   below) that defines the full travel between limits. Hitting a limit
-#   switch re-calibrates the stepper to a known absolute position (0 at the
-#   close end, max_distance_steps at the open end), correcting any drift.
+#   stroke is the LEARNED open-switch (S4) trigger position (open_stroke_steps,
+#   persisted), or open_default_mm before anything is learned. An open drives to
+#   stroke + open_margin_mm (open_default_mm before learning) and stops on S4; a
+#   close drives to -close_overtravel_mm and stops on S5. S5 re-zeroes the
+#   counter; S4 either teaches the stroke (an open that started from a fresh S5
+#   home with no stall) or re-syncs the counter to it. Reaching either target
+#   without its switch stops there and raises a fault (the "Fault" sensor).
 #   Position is saved at every IDLE transition, refreshed every 200 ms while
 #   moving, and captured once more at shutdown, so the cover survives reboots
 #   (including one mid-travel) without re-homing.
@@ -58,7 +62,7 @@
 # State machine (global_state, mirrored to the "State" text_sensor)
 # -----------------------------------------------------------------------------
 #   0 = IDLE      no motion in progress
-#   1 = OPENING   driving toward max_distance_steps
+#   1 = OPENING   driving toward the open target
 #   2 = CLOSING   driving toward 0
 #   3 = TAMPERED  tamper detected; alarm active or pending acknowledgement
 #
@@ -187,8 +191,8 @@ globals:
   # Cover state machine. Not persisted — every reboot starts IDLE, since the
   # motor is not actually moving at that point.
   #   0 = IDLE     no motion in progress
-  #   1 = OPENING  driving toward max_distance_steps
-  #   2 = CLOSING  driving toward 0
+  #   1 = OPENING  driving toward the open target
+  #   2 = CLOSING  driving toward the close target (or a set position)
   #   3 = TAMPERED tamper detected; cleared by "Clear Tamper Alert" or
   #                "Set Tamper Baseline" buttons. Tracks tamper_detected.
   # Mirrored to HA via the "State" text_sensor. Transitions back to IDLE
@@ -210,6 +214,64 @@ globals:
   - id: global_current_position
     type: int
     restore_value: yes
+    initial_value: '0'
+
+  # --- Learned open limit ---
+  # The open switch (S4) trigger position in steps from the S5 zero, learned on
+  # an open that started from a fresh S5 home with no stall, and accepted only
+  # within open_learn_min_mm..open_learn_max_mm. 0 = not learned yet (the open
+  # target is then open_default_mm). Persisted; written only when an accepted
+  # value moves by more than open_persist_delta_mm, so routine opens never
+  # write flash (ESPHome saves a restore_value global only when it changes).
+  - id: open_stroke_steps
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  # Set when S5 re-zeroes the counter; cleared by any motion start. An open that
+  # starts with it set is a learning open (learn_this_open), until a stall.
+  - id: homed_fresh
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: learn_this_open
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # This motion runs to an end target (open or close), so arriving there with
+  # the switch still released is a fault. Set positions and stall back-offs
+  # leave both false.
+  - id: open_to_end
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: close_to_end
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # Counter at the S4 trigger, and any re-sync shift applied right after it, so
+  # s4_coast_report can show the coast after the stop.
+  - id: s4_trigger_pos
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: s4_shift
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # The S4 press came while OPENING (captured before the stop). Only such a
+  # press can teach the stroke; an idle press only re-syncs.
+  - id: s4_while_opening
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # Active limit faults, shown by the "Fault" text sensor (not persisted: a
+  # reboot clears them; the next travel re-raises any that still hold).
+  #   bit 0 (1) open switch position out of range   cleared by an accepted learning
+  #   bit 1 (2) open limit switch not detected      cleared by the next S4 press
+  #   bit 2 (4) close limit switch not detected     cleared by the next S5 press
+  - id: limit_faults
+    type: int
+    restore_value: no
     initial_value: '0'
 
   # --- Anti-tamper baseline ---
@@ -305,7 +367,7 @@ globals:
     restore_value: no
     initial_value: 'false'
   # Per-travel deadline: armed immediately before each calibration travel from
-  # the LIVE speed (max_distance_steps / global_speed × 1.5 + 10 s). A
+  # the LIVE speed (open_default_mm travel / global_speed × 1.5 + 10 s). A
   # fixed timeout cannot work here — travel time ranges from ~34 s (speed
   # 10000) to ~57 min (speed 100) — and the wait_until conditions below always
   # exit on software target arrival anyway (open-loop stepper: the 200 ms
@@ -557,12 +619,16 @@ esphome:
               binary_sensor.is_on: limit_switch_1
             then:
               - logger.log: "SETTING LIMIT 1"
+              # The open switch is at the learned stroke (open_default_mm
+              # before anything is learned).
               - stepper.report_position:
                   id: driver
-                  position: ${max_distance_steps}
+                  position: !lambda |-
+                    return id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                     : (int32_t) (${open_default_mm} * ${steps_per_mm});
               - stepper.set_target:
                   id: driver
-                  target: ${max_distance_steps}
+                  target: !lambda "return id(driver)->current_position;"
         - if:
             condition:
               binary_sensor.is_on: limit_switch_2
@@ -574,6 +640,9 @@ esphome:
               - stepper.set_target:
                   id: driver
                   target: 0
+              - globals.set:
+                  id: homed_fresh
+                  value: 'true'
 
 # -----------------------------------------------------------------------------
 # Buzzer (passive piezo on GPIO5, driven by ledc PWM)
@@ -626,9 +695,10 @@ stepper:
 # -----------------------------------------------------------------------------
 # Button 1 (GPIO23): single click cycles between dismiss-alarm / stop-motor
 #   / close-cover based on global_state; double click opens the cover.
-# Limit switches (GPIO15 open, GPIO3 close): when triggered, report the known
-#   absolute position to the stepper (correcting drift), stop the cover, and
-#   inherit IDLE-state cleanup through stop_action. Presses are direction-
+# Limit switches (GPIO15 open = S4, GPIO3 close = S5): when triggered, stop the
+#   cover at once and fix the position: S5 re-zeroes the counter; S4 teaches
+#   the open stroke (learning open) or re-syncs the counter to it (drift
+#   correction). IDLE-state cleanup comes from motion_halt. Presses are direction-
 #   gated: a switch acts only when travel is toward it (or idle) — a press
 #   while moving AWAY is a mechanical blip and is logged then ignored, never
 #   allowed to stop motion or rewrite position. Both are polled rather
@@ -784,14 +854,68 @@ binary_sensor:
             condition:
               lambda: 'return id(global_state) != 2;'
             then:
-              - stepper.report_position:
-                  id: driver
-                  position: ${max_distance_steps}
-              - stepper.set_target:
-                  id: driver
-                  target: ${max_distance_steps}
+              # Stop at once: note the count at the trigger, then halt. With
+              # deceleration inf the halt writes VACTUAL 0 with no ramp past
+              # the switch; learning and re-sync happen after the stop.
+              - lambda: |-
+                  id(s4_trigger_pos) = id(driver)->current_position;
+                  id(s4_shift) = 0;
+                  id(s4_while_opening) = (id(global_state) == 1);
               - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 1 PRESSED"
+              - lambda: |-
+                  const float spm = ${steps_per_mm};
+                  const int32_t trig = id(s4_trigger_pos);
+                  const int32_t learned = id(open_stroke_steps);
+                  ESP_LOGI("limit", "S4 triggered at %d steps (%.2f mm)", (int) trig, trig / spm);
+                  id(limit_faults) &= ~2;          // the open switch works
+                  // Only a press DURING an open that started from a fresh S5
+                  // home with no stall teaches the stroke; any S4 press ends
+                  // that open's chance to.
+                  const bool learning = id(learn_this_open) && id(s4_while_opening);
+                  id(learn_this_open) = false;
+                  if (learning) {
+                    // This trigger position IS the stroke.
+                    const float mm = trig / spm;
+                    if (mm < ${open_learn_min_mm} || mm > ${open_learn_max_mm}) {
+                      id(limit_faults) |= 1;
+                      ESP_LOGW("limit", "FAULT: open switch position out of range: %.2f mm "
+                               "(accepted %.1f-%.1f mm); keeping %.2f mm",
+                               mm, ${open_learn_min_mm}, ${open_learn_max_mm}, learned / spm);
+                    } else {
+                      id(limit_faults) &= ~1;
+                      const int32_t delta = (int32_t) (${open_persist_delta_mm} * spm);
+                      if (learned <= 0) {
+                        id(open_stroke_steps) = trig;
+                        ESP_LOGI("limit", "Open stroke learned: %.2f mm (first value), saved", mm);
+                      } else if (std::abs(trig - learned) > delta) {
+                        id(open_stroke_steps) = trig;
+                        ESP_LOGI("limit", "Open stroke learned: %.2f mm (was %.2f mm), saved", mm, learned / spm);
+                      } else {
+                        ESP_LOGI("limit", "Open stroke confirmed: %.2f mm (measured %.2f mm, "
+                                 "within %.2f mm: not saved)", learned / spm, mm, ${open_persist_delta_mm});
+                      }
+                    }
+                  } else {
+                    // Not a learning open: re-sync the counter to the learned
+                    // switch position (drift correction), keeping any coast.
+                    // With nothing learned yet, to open_default_mm: that can only
+                    // over-estimate the position, so a following close runs long
+                    // and S5 stops it (never short of S5 with a false fault).
+                    const int32_t at = learned > 0 ? learned
+                                                   : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                    const int32_t now = id(driver)->current_position;
+                    id(s4_shift) = at - trig;
+                    id(driver)->report_position(now + id(s4_shift));
+                    id(driver)->set_target(now + id(s4_shift));
+                    id(global_current_position) = now + id(s4_shift);
+                    if (id(s4_shift) != 0)
+                      ESP_LOGI("limit", "S4 re-sync: counter %d -> %d steps%s", (int) trig, (int) at,
+                               learned > 0 ? "" : " (nothing learned yet: open_default_mm)");
+                  }
+              - component.update: open_stroke_sensor
+              - component.update: limit_fault_text
+              - script.execute: s4_coast_report
               # A full travel reached its end stop -> the StallGuard tune is fine;
               # clear any accumulated quiet-trip evidence (auto-tune).
               - lambda: 'id(sg_quiet_streak) = 0;'
@@ -834,7 +958,11 @@ binary_sensor:
                   target: 0
               - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 2 PRESSED"
-              - lambda: 'id(sg_quiet_streak) = 0;'   # clean full travel -> tune OK (auto-tune)
+              - lambda: |-
+                  id(sg_quiet_streak) = 0;       // clean full travel -> tune OK (auto-tune)
+                  id(homed_fresh) = true;        // the next open from here may teach the stroke
+                  id(limit_faults) &= ~4;        // the close switch works
+              - component.update: limit_fault_text
             else:
               - logger.log: "LIMIT 2 blip while opening - ignored"
 
@@ -913,11 +1041,14 @@ binary_sensor:
 # The cover entity (Home Assistant)
 # -----------------------------------------------------------------------------
 # Template cover backed by the TMC2209 stepper. Position is reported live as a
-# 0..1 ratio of current_position / max_distance_steps.
-#   - open_action     : drive to the configured travel limit (position 1.0)
-#   - close_action    : drive to step 0 (position 0.0)
-#   - position_action : drive to an arbitrary fraction set from HA — direction
-#                       is inferred by comparing the new target to current_position
+# 0..1 ratio of current_position / the learned open stroke.
+#   - open_action     : drive to the open target (learned stroke + margin) and
+#                       stop on the open switch (position 1.0)
+#   - close_action    : drive to -close_overtravel_mm and stop on the close
+#                       switch (position 0.0)
+#   - position_action : 100 % / 0 % run the open / close above; any other
+#                       fraction is a proportional move — direction is
+#                       inferred by comparing the new target to current_position
 #   - stop_action     : halt + flip state to IDLE + persist position
 #
 # Each motion action also updates global_state so the "State" text_sensor and
@@ -932,7 +1063,12 @@ cover:
       sorting_weight: 1
       sorting_group_id: group_control
     has_position: true
-    lambda: "return (float(id(driver)->current_position) / float(${max_distance_steps}));"
+    # 1.0 = the learned open switch position (open_default_mm before learning).
+    lambda: |-
+      const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                      : (int32_t) (${open_default_mm} * ${steps_per_mm});
+      float p = float(id(driver)->current_position) / float(stroke);
+      return p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
 
     # stop_action is the USER's STOP: web UI, Home Assistant, the API, Button 1,
     # the 80 °C cutoff and the stop-on-update listener. It halts at once and, if
@@ -977,32 +1113,57 @@ cover:
           then:
             - script.execute: cal_abort
       - logger.log: "COVER position_action"
-      - lambda: |-
-          id(motion_start_ms) = millis();
-          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-          id(sg_fired_this_move) = false;
-          id(stall_release_active) = false; // a new move gets its own stall release
-      # Direction is inferred by comparing the new target to current_position.
+      # 100 % and 0 % are the full open and close: their end targets, the limit
+      # switches and the learned stroke all apply. Anything between is a plain
+      # proportional move on the learned stroke.
       - if:
           condition:
-            lambda: 'return (pos * ${max_distance_steps}) >= id(driver)->current_position;'
+            lambda: 'return pos >= 1.0f;'
           then:
-            - globals.set:
-                id: global_state
-                value: "1"
-            - cover.template.publish:
-                id: glasscalibur_cover
-                current_operation: OPENING
+            - script.execute: drive_open
           else:
-            - globals.set:
-                id: global_state
-                value: "2"
-            - cover.template.publish:
-                id: glasscalibur_cover
-                current_operation: CLOSING
-      - stepper.set_target:
-          id: driver
-          target: !lambda return pos * ${max_distance_steps};
+            - if:
+                condition:
+                  lambda: 'return pos <= 0.0f;'
+                then:
+                  - script.execute: drive_close
+                else:
+                  - lambda: |-
+                      id(motion_start_ms) = millis();
+                      id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+                      id(sg_fired_this_move) = false;
+                      id(stall_release_active) = false; // a new move gets its own stall release
+                      id(homed_fresh) = false;          // any motion ends a fresh home
+                      id(learn_this_open) = false;
+                      id(open_to_end) = false;
+                      id(close_to_end) = false;
+                  # Direction is inferred by comparing the new target to current_position.
+                  - if:
+                      condition:
+                        lambda: |-
+                          const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                          : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                          return (int32_t) (pos * stroke) >= id(driver)->current_position;
+                      then:
+                        - globals.set:
+                            id: global_state
+                            value: "1"
+                        - cover.template.publish:
+                            id: glasscalibur_cover
+                            current_operation: OPENING
+                      else:
+                        - globals.set:
+                            id: global_state
+                            value: "2"
+                        - cover.template.publish:
+                            id: glasscalibur_cover
+                            current_operation: CLOSING
+                  - stepper.set_target:
+                      id: driver
+                      target: !lambda |-
+                        const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                        : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                        return (int32_t) (pos * stroke);
 
     # NOTE: on_opening / on_opened / on_closing / on_closed used to be wired
     # here, each re-publishing the same current_operation they fired on. That
@@ -1607,6 +1768,23 @@ sensor:
       sorting_weight: 6
       sorting_group_id: group_sg_adv
 
+  # The learned open switch (S4) position, mm from the close switch (S5)
+  # trigger. Unknown until the first clean open from a fresh S5 home. Also
+  # refreshed right after each S4 press.
+  - platform: template
+    name: "Open stroke"
+    id: open_stroke_sensor
+    unit_of_measurement: "mm"
+    accuracy_decimals: 2
+    update_interval: 60s
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 8
+      sorting_group_id: group_diagnostics
+    lambda: |-
+      if (id(open_stroke_steps) <= 0) return NAN;
+      return id(open_stroke_steps) / ${steps_per_mm};
+
 # -----------------------------------------------------------------------------
 # State exposure (HA)
 # -----------------------------------------------------------------------------
@@ -1634,6 +1812,25 @@ text_sensor:
         case 3: return {"TAMPERED"};
         default: return {"IDLE"};
       }
+
+  # Limit-switch faults (limit_faults bits), "None" when clear. Each is also
+  # logged at WARN when raised; see the limit_faults global for what clears it.
+  - platform: template
+    name: "Fault"
+    id: limit_fault_text
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_diagnostics
+    update_interval: 5s
+    lambda: |-
+      const int f = id(limit_faults);
+      if (f == 0) return {"None"};
+      std::string s;
+      if (f & 1) s += "open switch position out of range";
+      if (f & 2) { if (!s.empty()) s += "; "; s += "open limit switch not detected"; }
+      if (f & 4) { if (!s.empty()) s += "; "; s += "close limit switch not detected"; }
+      return {s};
 
   # (Firmware Version, Board, and the IP/SSID/MAC wifi_info sensors come from
   # core — core owns firmware_version_text and publishes it in on_boot.)
@@ -1722,6 +1919,9 @@ script:
   - id: motion_halt
     then:
       - stepper.stop: driver
+      - lambda: |-
+          id(open_to_end) = false;          // stopped short of any end target
+          id(close_to_end) = false;
       - globals.set:
           id: global_state
           value: "0"
@@ -1769,6 +1969,9 @@ script:
 
   # The motion half of the cover's open / close actions. Those call these after
   # their calibration check; calibration calls them directly.
+  # Open: to the learned stroke + open_margin_mm (open_default_mm before
+  # anything is learned) — the open switch stops it first. An open that starts
+  # from a fresh S5 home is a learning open (see limit_switch_1).
   - id: drive_open
     then:
       - lambda: |-
@@ -1776,15 +1979,34 @@ script:
           id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
           id(sg_fired_this_move) = false;
           id(stall_release_active) = false; // a new move gets its own stall release
+          id(learn_this_open) = id(homed_fresh);
+          id(homed_fresh) = false;
+          id(open_to_end) = true;
+          id(close_to_end) = false;
+          const float spm = ${steps_per_mm};
+          const int32_t learned = id(open_stroke_steps);
+          if (learned > 0) {
+            ESP_LOGI("limit", "Open stroke %.2f mm (learned); open target %.2f mm%s",
+                     learned / spm, learned / spm + ${open_margin_mm},
+                     id(learn_this_open) ? "; from a fresh home - will re-learn" : "");
+          } else {
+            ESP_LOGI("limit", "Open stroke not learned yet; open target %.2f mm%s",
+                     ${open_default_mm}, id(learn_this_open) ? "; from a fresh home - will learn" : "");
+          }
       - globals.set:
           id: global_state
           value: "1"
       - stepper.set_target:
           id: driver
-          target: ${max_distance_steps}
+          target: !lambda |-
+            return id(open_stroke_steps) > 0
+                ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
+                : (int32_t) (${open_default_mm} * ${steps_per_mm});
       - cover.template.publish:
           id: glasscalibur_cover
           current_operation: OPENING
+  # Close: at most close_overtravel_mm past the S5 zero — the close switch stops
+  # it first; arriving there with it released is a fault (interval poll).
   - id: drive_close
     then:
       - lambda: |-
@@ -1792,15 +2014,42 @@ script:
           id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
           id(sg_fired_this_move) = false;
           id(stall_release_active) = false; // a new move gets its own stall release
+          id(homed_fresh) = false;
+          id(learn_this_open) = false;
+          id(open_to_end) = false;
+          id(close_to_end) = true;
       - globals.set:
           id: global_state
           value: "2"
       - stepper.set_target:
           id: driver
-          target: 0
+          target: !lambda "return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});"
       - cover.template.publish:
           id: glasscalibur_cover
           current_operation: CLOSING
+
+  # Logs where the motor actually stopped after an S4 trigger, so the coast past
+  # the switch is visible (it should be a few steps: the stop is immediate).
+  # Shown in the trigger's counter frame, i.e. before any re-sync shift.
+  - id: s4_coast_report
+    mode: restart
+    then:
+      - delay: 300ms
+      - lambda: |-
+          const float spm = ${steps_per_mm};
+          if (id(global_state) != 0) {
+            ESP_LOGI("limit", "S4 stop: motion resumed within 300 ms - coast not read");
+            return;
+          }
+          const int32_t stopped = id(driver)->current_position - id(s4_shift);
+          const int32_t coast = stopped - id(s4_trigger_pos);
+          if (std::abs(coast) > (int32_t) (${coast_limit_mm} * spm)) {
+            ESP_LOGW("limit", "S4 stop: motor stopped at %d steps, coast %d steps (%.3f mm) - over the %.1f mm limit",
+                     (int) stopped, (int) coast, coast / spm, ${coast_limit_mm});
+          } else {
+            ESP_LOGI("limit", "S4 stop: motor stopped at %d steps, coast %d steps (%.3f mm)",
+                     (int) stopped, (int) coast, coast / spm);
+          }
 
   - id: tamper_alarm
     mode: restart
@@ -1853,7 +2102,7 @@ script:
   #      skipped steps still "arrives" at its software target, so every
   #      attempt re-claims a full travel of commanded distance. Each
   #      attempt gets a deadline computed from the LIVE speed
-  #      (max_distance_steps / global_speed × 1.5 + 10 s); a fixed
+  #      (open_default_mm travel / global_speed × 1.5 + 10 s); a fixed
   #      timeout cannot work — a full travel is ≈228 s at the default
   #      1500 steps/s and speed is user-tunable 100..10000. A spot that
   #      still stalls at 19 exhausts the ladder and fails the run: never
@@ -1951,13 +2200,18 @@ script:
           condition:
             binary_sensor.is_off: limit_switch_2
           then:
+            # Re-claim a full open travel so the close drives all the way to S5
+            # (or close_overtravel_mm past where zero would be).
             - stepper.report_position:
                 id: driver
-                position: ${max_distance_steps}
+                position: !lambda |-
+                  return id(open_stroke_steps) > 0
+                      ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
+                      : (int32_t) (${open_default_mm} * ${steps_per_mm});
             - lambda: |-
                 int spd = id(global_speed);
                 if (spd < 100) spd = 100;
-                id(cal_budget_ms) = (uint32_t)(1000.0f * ${max_distance_steps} / (float)spd * 1.5f) + 10000;
+                id(cal_budget_ms) = (uint32_t)(1000.0f * (${open_default_mm} * ${steps_per_mm}) / (float)spd * 1.5f) + 10000;
                 id(cal_t0_ms) = millis();
             - script.execute: drive_close
             - wait_until:
@@ -2239,10 +2493,13 @@ script:
             # Re-claim a full travel of commanded distance (the step counter
             # lies after a stall) and arm the speed-derived deadline.
             - lambda: |-
-                id(driver)->report_position(opening ? 0 : ${max_distance_steps});
+                const int32_t open_target = id(open_stroke_steps) > 0
+                    ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
+                    : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                id(driver)->report_position(opening ? 0 : open_target);
                 int spd = id(global_speed);
                 if (spd < 100) spd = 100;
-                id(cal_budget_ms) = (uint32_t)(1000.0f * ${max_distance_steps} / (float)spd * 1.5f) + 10000;
+                id(cal_budget_ms) = (uint32_t)(1000.0f * (${open_default_mm} * ${steps_per_mm}) / (float)spd * 1.5f) + 10000;
                 id(cal_t0_ms) = millis();
             - if:
                 condition:
@@ -2294,6 +2551,13 @@ script:
   # escalates on its own.
   - id: stall_response
     then:
+      # A stall ends any learning open (item: learn only from a clean open) and
+      # makes what follows a back-off, not an end-of-travel move.
+      - lambda: |-
+          id(learn_this_open) = false;
+          id(homed_fresh) = false;
+          id(open_to_end) = false;
+          id(close_to_end) = false;
       - if:
           condition:
             lambda: 'return !id(cal_active) && !id(stall_release_active);'
@@ -2307,8 +2571,10 @@ script:
                 int32_t tgt = was_closing ? pos + rel : pos - rel;
                 // Keep the target inside the travel: the limit switch must not
                 // be the only thing that stops an over-travel.
+                const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                : (int32_t) (${open_default_mm} * ${steps_per_mm});
                 if (tgt < 0) tgt = 0;
-                if (tgt > ${max_distance_steps}) tgt = ${max_distance_steps};
+                if (tgt > stroke) tgt = stroke;
                 id(stall_release_active) = true;
                 id(motion_start_ms) = millis();   // vibration launch mask for the reversal
                 id(vib_loud_count) = 0;           // the stall's judder is not new evidence
@@ -2364,7 +2630,9 @@ script:
           // Ignore trips near either end stop — a StallGuard trip as the sash
           // seats against a limit is expected, not a false positive.
           int32_t pos = id(driver)->current_position;
-          float frac = (float)pos / (float)${max_distance_steps};
+          const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                          : (int32_t) (${open_default_mm} * ${steps_per_mm});
+          float frac = (float)pos / (float)stroke;
           if (frac < 0.05f || frac > 0.95f) return;
           float bar = 0.5f * id(vib_threshold).state;
           if (id(vib_run_peak) >= bar) {           // vibration agreed -> real stall
@@ -2424,6 +2692,29 @@ interval:
               return (s == 1 || s == 2) &&
                      id(driver)->current_position == id(driver)->target_position;
           then:
+            # An end-of-travel move that reached its target without its switch:
+            # the motor has already stopped there. Raise the fault; no re-zero.
+            # Closing / opening stay allowed. Calibration is left alone: its leg
+            # treats "count arrived, no switch" as step loss and escalates.
+            - lambda: |-
+                if (id(cal_active)) return;
+                const float spm = ${steps_per_mm};
+                const int32_t pos = id(driver)->current_position;
+                if (id(global_state) == 1 && id(open_to_end) && !id(limit_switch_1).state) {
+                  id(limit_faults) |= 2;
+                  ESP_LOGW("limit", "FAULT: open limit switch not detected - stopped at the open target "
+                           "(%d steps, %.2f mm); position not re-zeroed", (int) pos, pos / spm);
+                }
+                if (id(global_state) == 2 && id(close_to_end) && !id(limit_switch_2).state) {
+                  id(limit_faults) |= 4;
+                  ESP_LOGW("limit", "FAULT: close limit switch not detected - stopped %.1f mm past zero "
+                           "(%d steps)", ${close_overtravel_mm}, (int) pos);
+                }
+            - lambda: |-
+                id(open_to_end) = false;
+                id(close_to_end) = false;
+                id(learn_this_open) = false;    // an open that ended without S4 teaches nothing
+            - component.update: limit_fault_text
             - globals.set:
                 id: global_state
                 value: "0"
