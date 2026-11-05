@@ -326,3 +326,27 @@ All distances are from the close switch (S5) trigger = 0, at `steps_per_mm`
   the stroke is learned). Caveat: with core's default TCOOLTHRS (100) the chip
   only reports stalls near the Fast preset (cruise TSTEP ≈ 375000/speed: Slow
   ≈ 312, Medium ≈ 144, Fast ≈ 68) until an auto-calibration sets TCOOLTHRS.
+
+## Uncalibrated fail-safe (v2.2.0)
+
+`sg_calibrated` (persisted, never cleared) is set in the success branch of
+`auto_calibrate`, next to `cal_speed_at`. A unit calibrated by an earlier
+firmware is recognised at boot (on_boot 500): `cal_speed_at` is only ever
+written by that success branch, so a nonzero value sets the flag once.
+
+- **Speed lock.** Until the flag is set, every move runs at `speed_fast` (5500,
+  the Fast preset): `drive_open`, `drive_close` and the cover's partial
+  `position_action` apply the effective speed before setting the target, and so
+  do on_boot 500 (after core's 600 apply), the Speed select and core's raw Speed
+  number (extended). Effective speed = `global_speed` when calibrated or while a
+  calibration runs, else `speed_fast`. Calibration runs at the user's speed: it
+  measures cruise TSTEP there to set TCOOLTHRS, and holds the StallGuard
+  reaction off anyway. The driver's default threshold (TCOOLTHRS 100) only
+  reports stalls near Fast (cruise TSTEP ≈ 375000/speed ≈ 68).
+- **Failed / aborted calibration** (could not home, never reached both limits,
+  too hot, aborted by user): `cal_keep_last_good` logs a WARN with the reason,
+  puts the last good chosen motor current back (rated 19 if never calibrated)
+  and re-applies the effective speed. SGTHRS / TCOOLTHRS are only written on
+  success, so the last good tune stays.
+- **Web UI / HA:** *Calibration Notice* (top of Control), *Speed Lock* (under the
+  Speed select), *StallGuard calibrated* (binary sensor, Diagnostics).
