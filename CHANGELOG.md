@@ -32,6 +32,14 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   the last good one (including its motor current) and logs a warning with the
   reason. Units already calibrated with an earlier version count as calibrated.
   Calibration itself still runs at the speed setting, which it tunes for.
+- **Calibrated speed.** Each successful calibration records the speed it ran
+  at, since its StallGuard tune is only valid there. If the speed setting is
+  changed afterwards, moves keep running at the calibrated speed and **Speed
+  Lock** reads "Speed change needs recalibration - running at <speed>" until a
+  calibration at the new speed succeeds; Calibration Status shows STALE meanwhile.
+  Units calibrated with an earlier version take their current speed setting as
+  the calibrated speed (logged at startup). Nothing in the firmware changes the
+  speed on its own (no quiet or night speed; schedules only open and close).
 - **Open stroke** diagnostic sensor (mm): the learned open switch position,
   also logged on every open.
 - **Fault** diagnostic text sensor: *open switch position out of range*,

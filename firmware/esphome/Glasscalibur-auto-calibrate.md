@@ -350,3 +350,22 @@ written by that success branch, so a nonzero value sets the flag once.
   success, so the last good tune stays.
 - **Web UI / HA:** *Calibration Notice* (top of Control), *Speed Lock* (under the
   Speed select), *StallGuard calibrated* (binary sensor, Diagnostics).
+
+## Calibrated speed (v2.2.0)
+
+`cal_speed` (persisted, 0 = not recorded) holds the speed the last successful
+calibration ran at — the only speed its StallGuard tune is valid for. It is set
+in the success branch next to `cal_speed_at`; a failed calibration keeps it. A
+calibrated unit with `cal_speed` 0 (calibrated by older firmware) takes its saved
+speed setting as the calibrated speed at boot, logged at INFO.
+
+The effective speed (substitution `effective_speed`, every speed setter): the
+setting while a calibration runs; Fast until calibrated; otherwise `cal_speed`.
+So changing the setting after a calibration keeps moves at the calibrated speed;
+**Speed Lock** reads "Speed change needs recalibration - running at <name> (<n>
+steps/s)" and Calibration Status appends STALE (now compared with `cal_speed`),
+until a calibration at the new setting succeeds.
+
+Speed writers (surveyed for this): the Speed select and core's raw Speed number,
+both user actions. Nothing changes the speed on its own, so there is one
+calibrated speed rather than one per preset.
