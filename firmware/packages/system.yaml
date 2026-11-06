@@ -214,6 +214,11 @@ ota:
   - platform: esphome
     on_begin:
       - logger.log: "Firmware update starting"
+
+# GitHub update download: check the server against ESP-IDF's built-in CA bundle
+# (core v0.3.0 turns the check off). Overrides core until valar-motion carries it.
+http_request:
+  verify_ssl: true
 # Add the LIS2DH12 i2c-poll log silencing to core's logger. Package merge folds
 # this logs map into core's (core owns the console uart + base level).
 logger:
