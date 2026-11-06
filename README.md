@@ -89,6 +89,8 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 - [`firmware/README.md`](firmware/README.md) — flashing and updates, first setup,
   calibration and the speed lock, the learned open stroke, faults and what to do,
   the buttons, an entity reference and the pin map.
+- [`hardware/README.md`](hardware/README.md) — the v1.8 CAD files (STEP and STL),
+  materials, and the parts not in the files.
 - [`tools/regression-gate/`](tools/regression-gate) — the checks run on every
   firmware change.
 - [Project wiki](https://github.com/Valar-Systems/Glasscalibur/wiki).
@@ -96,7 +98,9 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 ## License
 
 The firmware is licensed under the **GNU General Public License v3** — see
-[`firmware/LICENSE`](firmware/LICENSE).
+[`firmware/LICENSE`](firmware/LICENSE). The hardware design files in
+[`hardware/`](hardware) are licensed under **CERN-OHL-S-2.0** — see
+[`hardware/LICENSE`](hardware/LICENSE).
 
 If this project is useful to you, you can support it through
 [GitHub Sponsors](https://github.com/sponsors/valar-systems).
