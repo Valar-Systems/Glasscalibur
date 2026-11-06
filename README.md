@@ -7,14 +7,7 @@ browser** with no app and no cloud account, pair it natively with **Home
 Assistant**, or automate it with schedules, sunrise/sunset, or any system that
 can send an HTTP request (Node‑RED, scripts, IFTTT‑style webhooks, etc.).
 
-![window opener main](/media/readme/window-gif.gif)
-
-> The video above has the top cover removed so you can see the mechanism. Under
-> the cover, a custom PCB with an **ESP32‑C6** and a **TMC2209** stepper driver
-> runs the motor; **limit switches** at each end of travel give the cover an
-> absolute, self‑correcting position.
-
-![window opener top](/media/readme/top-gif.gif)
+> **Older design:** the original Model‑H (its Arduino firmware, STEP files and media) is kept at the [`legacy-old-design`](https://github.com/Valar-Systems/Glasscalibur/tree/legacy-old-design) tag.
 
 ---
 
@@ -48,8 +41,6 @@ the screw turns, a nut travels along it and pushes/pulls the window sash. A
 custom PCB with an **ESP32‑C6‑MINI** and a **TMC2209** silent stepper driver
 runs the motor over a single‑wire UART link.
 
-![window opener PCB](/media/readme/model-h-pcb.jpg)
-
 Two **limit switches** — one at each end of travel — give the cover a known
 absolute position: every time the carriage hits a limit, the firmware
 re‑calibrates its step count, so position never drifts. The board also carries:
@@ -71,8 +62,6 @@ Safety is the primary concern with this device.
 
 **Instant removal.** In an emergency the entire device lifts straight off the
 window — no tools, a couple of seconds.
-
-![instant removal](/media/readme/hand-gif.gif)
 
 **Obstruction & lock detection.** While moving, the cover watches for a stall
 two ways: the TMC2209's StallGuard reads the motor's mechanical load, and the
@@ -96,8 +85,6 @@ Before you build or buy, check that the device fits your window. Window **sill
 height** is the main factor.
 
 ### Is your window sill the correct height?
-
-![window sill](/media/readme/window-sill.jpg)
 
 The maximum distance from the top of the window frame to the sill is **2 inches**
 (red text above). More than that and you'll need to raise the opener — a piece
@@ -158,9 +145,6 @@ Full step‑by‑step guides for all of the above live in the
 | Path | Contents |
 | --- | --- |
 | [`firmware/esphome/`](/firmware/esphome) | **Current firmware** — the ESPHome config (`Glasscalibur-esphome.yml`) and a flashing/release guide. |
-| [`firmware/arduino/`](/firmware/arduino) | Legacy Arduino firmware (the original ESPUI/HTTP build). Kept for reference. |
-| [`hardware/v2.0/`](/hardware/v2.0) | 3D‑printable parts — STEP CAD files plus a ready‑to‑slice print platter (`platter-v1.3mf`). |
-| [`media/`](/media) | Images and GIFs used in the docs. |
 
 ---
 
@@ -168,8 +152,6 @@ Full step‑by‑step guides for all of the above live in the
 
 To keep it affordable, there's a kit — sourcing the screws and hardware
 individually gets expensive fast.
-
-![window kit](/media/readme/window-kit.jpg)
 
 Two kit versions are available — one with the 3D‑printed plastics and one
 without (print your own):
@@ -182,23 +164,13 @@ Full assembly instructions and a build video are in the
 
 ## How to 3D print it
 
-The printable parts are in [`hardware/v2.0/`](/hardware/v2.0):
-
-- **`platter-v1.3mf`** — a ready‑to‑slice [PrusaSlicer](https://www.prusa3d.com/prusaslicer/)
-  project with the parts laid out on the bed. Print in **PETG** at **0.25 mm**
-  layer height.
-- The individual **`.step`** files are the CAD source for each part if you want
-  to modify or re‑orient them.
-
-See the [**3D Printing Guide**](https://github.com/Valar-Systems/Glasscalibur/wiki/3D-Printing-Guide)
-for details.
+The STEP files and print platter in this repository were for the old design;
+they are kept at the [`legacy-old-design`](https://github.com/Valar-Systems/Glasscalibur/tree/legacy-old-design) tag.
 
 ## How to install it
 
 Installation is **fast** — a few minutes of work, then a 24‑hour wait for the
 adhesive to cure.
-
-![window mount](/media/readme/mount-gif.gif)
 
 1. Attach the **window mount** (to the sash).
 2. Attach the **sill mount**.
