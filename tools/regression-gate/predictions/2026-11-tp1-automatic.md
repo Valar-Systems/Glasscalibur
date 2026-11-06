@@ -110,3 +110,47 @@ B4 Script dry run: against a simulated unit that follows the documented behaviou
    isn't refused at 55 °C, and one where a refused Close doesn't cancel the pending open,
    each make the script report FAIL at that step.
 B5 Wording: the push gate passes on the diff, the commit messages and the PR text.
+
+## Amendment 1 — heat by Slow strokes (review, 2026-11-06; appended before more tooling; nothing above was edited)
+
+The review replaces the heat source and allows the script to change, then restore,
+three settings. Everything above stands except where this section says otherwise.
+
+**Heat source: full strokes at Slow and 600 mA.** Moves run at the calibrated speed, so
+if the unit isn't calibrated at Slow (Speed Slow, Speed Lock "Not locked", StallGuard
+calibrated on), the script, below 50 °C, saves Speed, Motor Current, Calibration Status,
+SGTHRS, TCOOLTHRS, Vibration Threshold and the two detector switches, sets Speed to
+Slow, runs Auto-Calibrate (waits for "OK"), then sets Motor Current to 600 mA. It then
+cycles full strokes. Per move it records the reading at the start, at the end and the
+peak after the stop, and counts the moves to 55 and to 60 and any Obstruction event
+(a false stop at 600 mA on a clear path).
+
+**The hold-current heater is the fallback**, used only if Slow strokes peak below 60 °C
+(its design and cutoffs as above).
+
+**Stages, changed:**
+- Phase A (gate at 55, no lockout): once a stroke ends at 50 °C or more, the script
+  switches to Set-position moves of 10 % to creep up, so the motor stands still between
+  55 and 60 for the gate checks. If one still overshoots past 60, the lockout stages run
+  first and phase A runs after the clear, in a second heat cycle (short moves again;
+  the heater only if moves can't stop inside 55-60). The report says which happened.
+- Phase B (lockout): full Slow strokes from below 55. If a stroke takes the reading past
+  60 while the motor is moving, that is the "move still running when it trips" step,
+  with real heat (predicted: the motor stops within 1 s of the lockout, State IDLE).
+  If the lockout only ever trips at standstill, that step uses the S0 injection
+  above instead, and the report says so.
+- The S0 back-off step stays an injection (a stall can't be produced on cue).
+
+**Backstops while cycling (new):** the script never starts a stroke at or above 55 °C
+(only the refusal probes), and sends STOP at a reading of 62 °C or after 10 s with no
+reading. The test package also stops the motor in firmware at 62 °C on its independent
+reading, and logs it; either backstop firing is a FAIL.
+
+**Afterwards:** below 50 °C the script puts back the original Speed, runs Auto-Calibrate
+at that speed and sets the original Motor Current, and reports old and new calibration
+values side by side. Not fully restorable, and reported if it applies: a unit that was
+never calibrated stays calibrated (the flag is never cleared), and the restored
+calibration's values are re-measured, not copied back.
+
+B4 (script dry run) now covers the Slow-stroke heating, the restore, and the overshoot
+branch of phase A.
