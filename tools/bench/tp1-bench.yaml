@@ -1,0 +1,210 @@
+# =============================================================================
+# BENCH ONLY — never flash this to a customer unit. Never built by CI or a release.
+# =============================================================================
+# RULE for edits here: give every interval a period NO product interval uses (today:
+# 60s, 200ms x2, 1s, 100ms, 500ms). The regression gate anchors intervals by period, so
+# a shared period re-numbers the product's anchor and makes the product look changed
+# (TP-1 predictions, Amendment 2). This package uses 1500ms.
+# The TP-1 test package (tools/regression-gate/predictions/2026-11-tp1-automatic.md,
+# with Amendment 1), merged into tools/bench/glasscalibur-tp1.yaml. It changes no
+# product file. tools/bench/tp1_run.py drives it. TP-1 heats the motor with full
+# strokes at Slow; this package adds what the script can't do from outside:
+#
+# Motion backstop: at 62 °C on its own reading ("BENCH motor temperature") with the
+# motor moving, it stops the driver directly, then runs motion_halt, and logs it.
+# TP-1 records that as a FAIL (the lockout at 60 °C should have stopped it).
+#
+# Heater (fallback, only if Slow strokes peak below 60 °C): heats the motor with its
+# own hold current. While "BENCH heater" is on and
+# the motor is stopped it writes IHOLD to the driver: 19 (0.6 A, the motor's rating)
+# first; every 3 min, if the reading rose less than 1 °C and is below 60 °C, +4, up to
+# 31 (~0.96 A). It re-writes the level every 5 s while stopped. Off = IHOLD 0.
+#
+# The heater turns itself off, independent of the code under test:
+#   1 the thermal lockout latched            5 the script's API connection closed
+#   2 62 °C (backstop - TP-1 records FAIL)   6 the script's keepalive stopped (30 s)
+#   3 no valid reading for 10 s              7 switched off by the script
+#   4 45 min on                              and at reboot (core writes IHOLD 0 at
+#                                            boot; the heater starts off)
+# Cutoffs 2 and 3 use "BENCH motor temperature", a second reading of the same
+# TMP1075, not the product's sensor or its logic.
+#
+# Also: fire schedule_open / schedule_close directly (no schedule setting changes),
+# and run the product's own lockout routine on demand for the two TP-1 steps real
+# heat can't reach (a move, or a stall back-off, already running when it trips).
+# =============================================================================
+
+globals:
+  - { id: bench_heat_on,      type: bool,     restore_value: no, initial_value: 'false' }
+  - { id: bench_ihold,        type: int,      restore_value: no, initial_value: '0' }
+  - { id: bench_heat_start_ms, type: uint32_t, restore_value: no, initial_value: '0' }
+  - { id: bench_step_ms,      type: uint32_t, restore_value: no, initial_value: '0' }
+  - { id: bench_step_c,       type: float,    restore_value: no, initial_value: '0' }
+  - { id: bench_write_ms,     type: uint32_t, restore_value: no, initial_value: '0' }
+  - { id: bench_keepalive_ms, type: uint32_t, restore_value: no, initial_value: '0' }
+  - { id: bench_last_ok_ms,   type: uint32_t, restore_value: no, initial_value: '0' }
+  - { id: bench_stop_code,    type: int,      restore_value: no, initial_value: '0' }
+  - { id: bench_backstop_fired, type: bool,   restore_value: no, initial_value: 'false' }
+
+sensor:
+  # Independent reading for the heater's own cutoffs.
+  - platform: tmp1075
+    name: "BENCH motor temperature"
+    id: bench_temp
+    i2c_id: i2c_bus
+    address: 0x49
+    update_interval: 2s
+    accuracy_decimals: 2
+    entity_category: DIAGNOSTIC
+    on_value:
+      - lambda: 'if (!isnan(x)) id(bench_last_ok_ms) = millis();'
+  # The IHOLD the driver holds (its register copy).
+  - platform: template
+    name: "BENCH heater IHOLD"
+    id: bench_ihold_sensor
+    entity_category: DIAGNOSTIC
+    accuracy_decimals: 0
+    update_interval: 2s
+    lambda: 'return (float) id(driver)->read_field(IHOLD_FIELD);'
+
+text_sensor:
+  - platform: template
+    name: "BENCH heater status"
+    id: bench_heater_status
+    entity_category: DIAGNOSTIC
+    update_interval: 2s
+    lambda: |-
+      static const char *const R[] = {"", "lockout", "62 C backstop", "no reading 10 s",
+                                      "45 min limit", "script disconnected",
+                                      "keepalive lost", "switched off"};
+      char buf[80];
+      if (id(bench_backstop_fired))
+        snprintf(buf, sizeof(buf), "BACKSTOP FIRED (62 C, motor moving); heater %s",
+                 id(bench_heat_on) ? "on" : "off");
+      else if (id(bench_heat_on))
+        snprintf(buf, sizeof(buf), "on IHOLD %d, %u s", id(bench_ihold),
+                 (unsigned) ((millis() - id(bench_heat_start_ms)) / 1000));
+      else
+        snprintf(buf, sizeof(buf), "off%s%s", id(bench_stop_code) ? ": " : "",
+                 R[id(bench_stop_code) < 8 ? id(bench_stop_code) : 0]);
+      return {buf};
+
+switch:
+  - platform: template
+    name: "BENCH heater"
+    id: bench_heater
+    entity_category: CONFIG
+    restore_mode: ALWAYS_OFF
+    lambda: 'return id(bench_heat_on);'
+    turn_on_action:
+      - lambda: |-
+          if (id(bench_heat_on)) return;
+          const float t = id(bench_temp).state;
+          if (id(thermal_lockout) || isnan(t) || t >= 62.0f) {
+            ESP_LOGW("bench", "heater refused - lockout set, no reading or at 62 degC");
+            return;
+          }
+          const uint32_t now = millis();
+          id(bench_heat_on) = true;
+          id(bench_ihold) = 19;
+          id(bench_stop_code) = 0;
+          id(bench_heat_start_ms) = now;
+          id(bench_step_ms) = now;
+          id(bench_step_c) = t;
+          id(bench_keepalive_ms) = now;
+          id(bench_write_ms) = 0;               // write on the next tick
+          ESP_LOGW("bench", "heater ON - IHOLD 19 at %.2f degC", t);
+    turn_off_action:
+      - script.execute: { id: bench_heater_stop, code: 7 }
+
+button:
+  - platform: template
+    name: "BENCH heater keepalive"
+    entity_category: CONFIG
+    on_press:
+      - lambda: 'id(bench_keepalive_ms) = millis();'
+  - platform: template
+    name: "BENCH: fire scheduled open"
+    entity_category: CONFIG
+    on_press:
+      - logger.log: "BENCH: firing schedule_open"
+      - script.execute: schedule_open
+  - platform: template
+    name: "BENCH: fire scheduled close"
+    entity_category: CONFIG
+    on_press:
+      - logger.log: "BENCH: firing schedule_close"
+      - script.execute: schedule_close
+  - platform: template
+    name: "BENCH: trip thermal lockout"
+    entity_category: CONFIG
+    on_press:
+      - logger.log: "BENCH: running the product lockout routine (cause: temperature)"
+      - lambda: 'id(thermal_trip)->execute(1);'
+
+script:
+  - id: bench_heater_stop
+    parameters:
+      code: int
+    then:
+      - lambda: |-
+          if (!id(bench_heat_on)) return;
+          id(bench_heat_on) = false;
+          id(bench_stop_code) = code;
+          id(driver)->write_field(IHOLD_FIELD, 0);
+          ESP_LOGW("bench", "heater OFF (code %d) at %.2f degC after %u s, IHOLD was %d", code,
+                   id(bench_temp).state, (unsigned) ((millis() - id(bench_heat_start_ms)) / 1000),
+                   id(bench_ihold));
+      - component.update: bench_heater_status
+
+api:
+  on_client_disconnected:
+    - if:
+        condition:
+          lambda: 'return client_info.find("tp1") != std::string::npos;'
+        then:
+          - script.execute: { id: bench_heater_stop, code: 5 }
+
+interval:
+  - interval: 1500ms   # unique period: see the RULE at the top
+    then:
+      # Motion backstop (always armed).
+      - if:
+          condition:
+            lambda: |-
+              const float t = id(bench_temp).state;
+              const int s = id(global_state);
+              return !isnan(t) && t >= 62.0f && (s == 1 || s == 2);
+          then:
+            - lambda: |-
+                id(driver)->stop();
+                id(bench_backstop_fired) = true;
+                ESP_LOGE("bench", "BACKSTOP: %.2f degC with the motor moving - driver stopped (TP-1 FAIL)",
+                         id(bench_temp).state);
+            - script.execute: motion_halt
+      # Heater (fallback).
+      - lambda: |-
+          if (!id(bench_heat_on)) return;
+          const uint32_t now = millis();
+          const float t = id(bench_temp).state;
+          int code = 0;
+          if (id(thermal_lockout)) code = 1;
+          else if (!isnan(t) && t >= 62.0f) code = 2;
+          else if (now - id(bench_last_ok_ms) >= 10000UL) code = 3;
+          else if (now - id(bench_heat_start_ms) >= 45UL * 60UL * 1000UL) code = 4;
+          else if (now - id(bench_keepalive_ms) >= 30000UL) code = 6;
+          if (code) { id(bench_heater_stop)->execute(code); return; }
+          if (now - id(bench_step_ms) >= 180000UL) {
+            if (!isnan(t) && t < 60.0f && t - id(bench_step_c) < 1.0f && id(bench_ihold) < 31) {
+              id(bench_ihold) = std::min(31, id(bench_ihold) + 4);
+              ESP_LOGW("bench", "heater: rose %.2f degC in 3 min - IHOLD %d", t - id(bench_step_c),
+                       id(bench_ihold));
+            }
+            id(bench_step_ms) = now;
+            id(bench_step_c) = t;
+          }
+          const int s = id(global_state);
+          if ((s == 0 || s == 3) && now - id(bench_write_ms) >= 5000UL) {
+            id(driver)->write_field(IHOLD_FIELD, id(bench_ihold));
+            id(bench_write_ms) = now;
+          }

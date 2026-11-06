@@ -1,3 +1,6 @@
 # ESPHome build cache for the bench-only configs
 /.esphome/
 /secrets.yaml
+# TP-1 run output (reports, device logs) and Python caches
+/out/
+__pycache__/
