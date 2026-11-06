@@ -154,3 +154,22 @@ calibration's values are re-measured, not copied back.
 
 B4 (script dry run) now covers the Slow-stroke heating, the restore, and the overshoot
 branch of phase A.
+
+## Amendment 2 — B2 re-registered (review, 2026-11-06; appended, nothing above was edited)
+
+The miss is kept on record. B2 predicted that, against the bench build, the behaviour
+gate would show nothing changed and nothing dropped, only new BENCH anchors. The reading
+(entities as predicted: 9 BENCH added, 0 removed):
+- CHANGED `esphome:on_boot :: 600.0`: the only difference is the published Firmware
+  Version, `dev` -> `dev-tp1`, from the test wrapper's version override (kept: a test
+  build never reports a product version).
+- DROPPED `interval:1s`, NEW `interval:1s#1` and `#2`: the test package's interval
+  shared the tamper check's 1 s period, so the gate numbered both. The tamper interval's
+  body is unchanged.
+
+Fix: the test package's interval now uses 1500 ms, a period no product interval uses,
+and a rule at the top of `tools/bench/tp1-bench.yaml` says so for later edits.
+
+Re-registered B2: against the bench build, the only product change is the
+version-publishing boot step (`dev` -> `dev-tp1`); nothing is dropped; every new anchor
+is a BENCH one. Entities: only BENCH ones added, none removed. Same sabotage.
