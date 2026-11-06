@@ -32,3 +32,13 @@ P4 Wording: the push scans pass on the diff, the commit messages and the PR text
 
 - T1 With this build, **Update Firmware (GitHub)** installs the latest release end to
   end, through GitHub's redirect.
+
+## Amendment 1 — P2 re-registered (Daniel, 2026-11-06; appended, nothing above was edited)
+
+The miss is kept on record. P2's sabotage said the base build has no CA bundle; it does
+(the bundle is ESP-IDF's default, already in the base). The image also changed by
+-272 bytes, not a growth.
+
+Re-registered P2: the build no longer contains ESP-IDF's options that skip the server
+check, the CA bundle stays, and the image changes by less than 100 KB either way; CI green.
+Sabotage: the base build has both skip options on.
