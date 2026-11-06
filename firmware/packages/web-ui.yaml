@@ -17,6 +17,10 @@
 # Stall Detection is its own first-class group (it is NOT a StallGuard feature),
 # while the TMC2209 StallGuard registers drop to an advanced group at the bottom.
 web_server:
+  # Don't answer browsers' private-network preflights (ESPHome's own default
+  # from 2026.10). The unit's own page, Home Assistant and REST clients don't
+  # use them.
+  enable_private_network_access: false
   sorting_groups:
     - { id: group_tuning,   name: "Motion Tuning",         sorting_weight: 12 }
     - { id: group_cal,      name: "Calibration",           sorting_weight: 22 }
