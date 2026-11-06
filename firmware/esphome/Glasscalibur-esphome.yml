@@ -1,0 +1,93 @@
+# =============================================================================
+# Glasscalibur — board wrapper (ESP32-C6)
+# =============================================================================
+# Sets this board's chip, GPIO map, OTA identity, and hardware constants, then
+# pulls the shared valar-core + scheduling from Valar-Systems/valar-motion as
+# packages and layers the Glasscalibur product (window cover, limit switches,
+# accelerometer tamper/stall, buzzer, auto-calibration) on top.
+#
+# Glasscalibur differs from the VAL30xx reference boards in hardware: a 220 mOhm
+# sense resistor, immediate-stop deceleration, and a fixed counter-clockwise
+# motor direction with no runtime direction select. Those are expressed through
+# the stepper_* / motor_direction_default substitutions that core v0.3.0 added.
+# =============================================================================
+substitutions:
+  device_name: "glasscalibur"
+  friendly_name: "Glasscalibur"
+  board_id: "Glasscalibur (ESP32-C6)"
+  esp_board: "esp32-c6-devkitc-1"
+  log_uart: "USB_SERIAL_JTAG"
+  ota_repo: "Valar-Systems/Glasscalibur"   # field units self-update from Glasscalibur's own releases
+  ota_asset: "Glasscalibur"
+  # "dev" for local/branch builds; the release workflow overrides it with the
+  # git tag (-s fw_version) so shipped units report the version they run.
+  fw_version: "dev"
+
+  # --- GPIO map -------------------------------------------------------------
+  pin_uart_tx: "1"
+  pin_uart_rx: "0"
+  pin_enn: "8"
+  pin_index: "6"
+  pin_diag: "14"
+  pin_btn1: "23"           # Button 1
+  pin_btn2: "2"            # UNUSED — core's Button 2 is !removed in the product
+                          # layer (Glasscalibur has no second button); this only
+                          # exists so the substitution resolves before removal.
+  pin_btn_wifi: "21"       # Wi-Fi / Calibrate button
+
+  # --- Stepper hardware (overrides core v0.3.0 defaults) --------------------
+  stepper_rsense: "220 mOhm"
+  stepper_vsense: "false"
+  stepper_deceleration: "inf"          # immediate stop
+  stepper_max_speed: "5500 steps/s"
+  stepper_acceleration: "100 steps/s^2"
+  # The Fast speed preset. Also the speed every move uses until a calibration has
+  # succeeded on this unit: the driver's default StallGuard threshold (TCOOLTHRS
+  # 100) only reports stalls near this speed (cruise TSTEP ≈ 375000/speed ≈ 68).
+  speed_fast: "5500"
+  # The speed every move actually runs at (C++ expression, used by every speed
+  # setter in the product): during a calibration the user's setting (calibration
+  # tunes StallGuard for it); not yet calibrated -> Fast; calibrated -> the speed
+  # the last successful calibration ran at (cal_speed), which equals the setting
+  # unless the setting was changed since.
+  effective_speed: "(id(cal_active) ? id(global_speed) : (!id(sg_calibrated) ? ${speed_fast} : (id(cal_speed) > 0 ? id(cal_speed) : id(global_speed))))"
+  stepper_config_dump: "false"
+  motor_direction_default: "COUNTERCLOCKWISE"
+
+  # --- Mechanical constants (product) ---------------------------------------
+  steps_per_revolution: "1600"     # 200 full steps × 8 microsteps
+  steps_per_mm:        "3066.6667" # Tr6×1 leadscrew, 12T:23T motor→screw: 1600 × 23 / 12
+  # Open end of travel. All distances are from the close switch (S5) trigger =
+  # position 0. The open switch (S4) position is LEARNED per unit (switch ON-point
+  # tolerance is too wide for one fixed number); the open target is that + a
+  # small margin. New carriage: S4 ≈ 99.3 mm [98.8–99.8], hard stop ≈ 100.6 mm
+  # [100.35–100.9]. Old carriage: S4 ≈ 95.5 mm, hard stop ≈ 99.1 mm.
+  open_learn_min_mm:     "94.0"    # accept a learned S4 position only inside
+  open_learn_max_mm:     "101.0"   #   this range, else fault and keep the old one
+  open_default_mm:       "101.0"   # open target before anything is learned
+  open_margin_mm:        "0.5"     # open target = learned S4 position + this
+  open_persist_delta_mm: "0.05"    # write flash only when the learned value moves more
+  close_overtravel_mm:   "0.6"     # a close may run this far past zero; the carriage
+                                   #   meets the front plate ≥ 0.7 mm past S5
+  coast_limit_mm:        "0.3"     # S4 stop coast above this is logged as a WARN
+  cal_sg_floor:        "80"        # min acceptable SG_RESULT during a clean calibration travel
+  cal_vib_backstop:    "0.45"      # vibration threshold floor held during calibration probes
+  stall_release_steps: "24500"     # stall auto-release back-off (~8 mm sash travel)
+
+esphome:
+  project:
+    name: "valar-systems.glasscalibur"
+    version: "${fw_version}"
+
+packages:
+  valar_core:
+    url: https://github.com/Valar-Systems/valar-motion
+    ref: v0.3.0
+    files: [common/valar-core.yaml]
+    refresh: 1d
+  scheduling:
+    url: https://github.com/Valar-Systems/valar-motion
+    ref: v0.3.0
+    files: [common/scheduling.yaml]
+    refresh: 1d
+  product: !include ./glasscalibur-product.yaml
