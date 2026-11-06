@@ -76,3 +76,38 @@ P8 Public-wording scan with an exact-line move rule: a flagged added line counts
    `glasscalibur-product.yaml` / `Glasscalibur-esphome.yml`. Predicted: the flagged
    lines are exactly the 22 already in the base (same texts); 0 new uses.
    Sabotage: a planted new line with a flagged word is caught under the move rule.
+
+## Amendment 1 — R1 miss on the interval list (appended; nothing above was edited)
+
+R1 on the first split (packages merged system, web-ui, motion, limits, faults, stall,
+calibration, temperature, tamper, buttons): normalised differences 0; raw order
+differed in binary_sensor, button, globals, interval, number, script, sensor, switch.
+`interval` was not in the predicted set: the 1 s tamper check moved from second to
+last (tamper merged after stall and calibration). The two 200 ms intervals kept their
+order. Work stopped and was reported.
+
+Decision (Daniel, in the session): restore the order — merge the tamper package before
+stall and re-run every check. Fallback: if moving the tamper package reorders anything
+else (entities, globals, scripts, web UI order), don't chase it; keep the first order
+and record the interval reorder as harmless, with this evidence (ESPHome 2026.6.5):
+- core/scheduler.cpp, calculate_interval_offset_(): each interval's first run gets a
+  random offset in [0, min(interval/2, 5000 ms)), so the four intervals' relative phase
+  is random on every boot, whatever order they register in.
+- SchedulerItem::cmp orders due items only by next-execution time; there is no
+  tie-break on registration order.
+- IntervalTrigger has no loop(); it runs only through PollingComponent's scheduler
+  interval, so registration order does not change when it runs.
+- Shared state: the tamper check reads global_state, which the 200 ms position interval
+  sets when travel ends. When both are due in the same pass, which runs first already
+  depends on that random phase, not on registration order. The tamper check reads
+  nothing the 100 ms sampler or the vibration check writes.
+
+Re-registered for the re-run: package order system, web-ui, motion, limits, faults,
+tamper, stall, calibration, temperature, buttons. R1 predicted: normalised differences
+0; raw order differs only in lists from the original predicted set (globals,
+binary_sensor, number, switch, button, sensor, text_sensor, script, esphome.on_boot),
+and `interval` is in its original order (200 ms poll, 1 s tamper, 200 ms vibration,
+100 ms sampler). Fallback check: any list outside that set reordering, or a change in
+web UI display order (an entity sharing group and sorting weight with another, whose
+relative order then depends on registration order), triggers the fallback. All other
+checks unchanged.
