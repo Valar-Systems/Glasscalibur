@@ -1,225 +1,102 @@
-# Glasscalibur — Automated Horizontal Window Opener
+# Glasscalibur — automatic window opener
 
-Glasscalibur is a smart opener for horizontal-sliding windows. A NEMA stepper
-motor drives a lead screw that slides your window open and closed, controlled by
-an ESP32‑C6 running [ESPHome](https://esphome.io). Control it from **any web
-browser** with no app and no cloud account, pair it natively with **Home
-Assistant**, or automate it with schedules, sunrise/sunset, or any system that
-can send an HTTP request (Node‑RED, scripts, IFTTT‑style webhooks, etc.).
+Glasscalibur opens and closes a window with a small stepper motor, a lead screw and
+a sliding ram. It runs [ESPHome](https://esphome.io) on an ESP32‑C6, so you can
+control it from a web browser on your network with no app or cloud account, pair it
+with Home Assistant, put it on a schedule, or drive it from anything that can send
+an HTTP request.
 
 > **Older design:** the original Model‑H (its Arduino firmware, STEP files and media) is kept at the [`legacy-old-design`](https://github.com/Valar-Systems/Glasscalibur/tree/legacy-old-design) tag.
 
 ---
 
-## Features
-
-- **Browser control, no cloud** — open `http://glasscalibur-XXXXXX.local` on
-  your network and drive the cover, tune the motor, and set schedules. No Home
-  Assistant or account required.
-- **Native Home Assistant** — auto‑discovered over the ESPHome API as a real
-  cover entity (no `command_line`/curl glue).
-- **Built‑in scheduling** — open/close at fixed times **or** at sunrise/sunset
-  (with minute offsets), all editable from the browser. Survives reboots.
-- **Obstruction & stall protection** — TMC2209 **StallGuard** plus an
-  accelerometer‑based **vibration‑stall** backstop stop the motor when the
-  window jams, is locked, or something gets in the way, and save the position.
-- **Over‑temperature cutoff** — an on‑board temperature sensor stops the motor
-  if it exceeds 80 °C.
-- **Anti‑tamper alarm** — the accelerometer flags if a mounted unit is moved or
-  tilted and sounds a buzzer.
-- **Over‑the‑air updates** — a one‑click **Update Firmware** button pulls the
-  latest release straight from GitHub. No computer needed.
-- **Instant manual override** — the whole device lifts off the window in a
-  couple of seconds for cleaning or emergencies (see GIF below).
-
----
-
 ## How it works
 
-Glasscalibur uses a **NEMA 17 stepper motor** connected to a **lead screw**. As
-the screw turns, a nut travels along it and pushes/pulls the window sash. A
-custom PCB with an **ESP32‑C6‑MINI** and a **TMC2209** silent stepper driver
-runs the motor over a single‑wire UART link.
+- **Drive.** A NEMA 8 stepper turns a Tr6×1 lead screw through a 12T:23T gear
+  reduction. A printed carriage rides the lead screw. A 12 mm aluminum tube (the
+  ram) threads into the carriage and leaves the front of the unit through a rod
+  wiper seal; rods and connectors join the ram to the window.
+- **Housing.** An aluminum extrusion with printed end parts: motor cradle, back
+  plate, front plate and end cap. The unit can be mounted either way up. Two end
+  mounts hold it: VHB tape for most installs, with an optional screw in each mount.
+- **Electronics.** The main board carries the ESP32‑C6, a TMC2209 stepper driver,
+  two Panasonic ESE22 detector switches as the end‑of‑travel switches, a LIS2DH12
+  accelerometer and a buzzer. A small separate board with a TMP1075 sits on the
+  motor and reads its temperature.
+- **End of travel.** The close switch is position zero. The open switch's position
+  is learned on each unit, and an open drives to just past it (0.5 mm), stopping on
+  the switch. The mechanism itself stops before 4 in.
 
-Two **limit switches** — one at each end of travel — give the cover a known
-absolute position: every time the carriage hits a limit, the firmware
-re‑calibrates its step count, so position never drifts. The board also carries:
+## Features
 
-- a **TMP1075** temperature sensor (motor over‑temp cutoff),
-- a **LIS2DH12** 3‑axis accelerometer (vibration‑stall + anti‑tamper),
-- a **piezo buzzer** (tamper alarm), and
-- physical buttons (a control button and a Wi‑Fi‑reset button).
+All of these come from the firmware in [`firmware/`](firmware):
 
-The firmware is a single ESPHome configuration — see
-[`firmware/`](/firmware) (`glasscalibur.yaml` plus `packages/`) for the full, heavily commented config
-and a flashing guide.
+- **Browser control** — open `http://glasscalibur-XXXXXX.local` on your network to
+  move the window, change settings, set schedules and read diagnostics.
+- **Home Assistant** — discovered over the native ESPHome API as a cover entity,
+  with every setting and sensor alongside it.
+- **Schedules** — open and close at fixed times, or at sunrise and sunset with
+  offsets in minutes.
+- **Learned open limit** — the unit learns where its open switch triggers and opens
+  to just past it; the **Open stroke** sensor shows the learned distance.
+- **Limit-switch faults** — an open or close that reaches its end without the switch
+  stops there and reports it on the **Fault** sensor.
+- **Stall detection** — the TMC2209's StallGuard and an accelerometer vibration
+  check stop the motor when the window jams, then back it off about 8 mm. Each stop
+  fires an **Obstruction** event Home Assistant can trigger on.
+- **Auto‑calibration** — finds the lowest reliable motor current and tunes both stall
+  detectors for this window. Until it has run, every move goes at the Fast speed.
+- **Motor temperature cutoff** — motion stops if the motor reads above 80 °C.
+- **Tamper alarm** — once armed, the accelerometer notices if the mounted unit is
+  moved and sounds the buzzer.
+- **Child Lock** — makes the unit's own button ignore presses; the web UI, Home
+  Assistant and schedules keep working.
+- **Position across reboots** — the position is saved while moving and at every
+  restart, including the restart at the end of a firmware update.
+- **Updates over the air** — the **Update Firmware (GitHub)** button installs the
+  latest release; the motor stops when an update begins.
 
----
+## Install overview
 
-## Safety features
+1. Mount the unit with its two end mounts (VHB tape; an optional screw in each).
+2. Join it to your Wi‑Fi (see [first setup](firmware/README.md#first-setup)).
+3. Run **Auto‑Calibrate** once. Until a calibration succeeds, the speed is locked
+   to Fast.
+4. If calibration hasn't already taught the open stroke (**Open stroke** still
+   unknown), close fully, then open once.
 
-Safety is the primary concern with this device.
+## Using it
 
-**Instant removal.** In an emergency the entire device lifts straight off the
-window — no tools, a couple of seconds.
-
-**Obstruction & lock detection.** While moving, the cover watches for a stall
-two ways: the TMC2209's StallGuard reads the motor's mechanical load, and the
-accelerometer watches for the hard vibration a jammed mechanism produces. If
-something gets in the way, or the window is locked, the motor stops and saves
-its position. Both detectors have adjustable sensitivity so you can tune them to
-your window.
-
-**Over‑temperature cutoff.** If the motor sensor reads above 80 °C, motion stops
-automatically.
-
-**Anti‑tamper.** Once armed, the accelerometer learns the device's resting
-orientation; if a mounted unit is bumped, tilted, or pried, it raises a Tamper
-alert and sounds the buzzer.
-
----
-
-## Will it work on your window?
-
-Before you build or buy, check that the device fits your window. Window **sill
-height** is the main factor.
-
-### Is your window sill the correct height?
-
-The maximum distance from the top of the window frame to the sill is **2 inches**
-(red text above). More than that and you'll need to raise the opener — a piece
-of wood such as a 1×4 or 2×4 under the whole device works well.
-
-To attach the window mount (white piece above), you need **14 mm** of the lower
-sash exposed.
-
-### Is your window wide enough?
-
-The device is just under **22 in** end to end, so your window needs to be at
-least **44 in** wide — add 2 in to be safe, so target **46 in**.
-
-### Is your window too heavy?
-
-The motor has been tested up to **40 lb** of window. That's very heavy and can
-cause problems; if your window is that heavy, lubricate the track with dry
-silicone spray first and see if that helps.
-
----
-
-## Controlling it
-
-You have several options, and they all work at once:
-
-| Method | How |
+| How | What you get |
 | --- | --- |
-| **Web browser** | Open `http://glasscalibur-XXXXXX.local` (the `XXXXXX` MAC suffix is printed on the USB serial log at boot). Full control panel — cover, motor tuning, schedule, diagnostics. |
-| **Home Assistant** | The device is auto‑discovered over the native ESPHome API as a `cover` entity. No YAML, no curl. |
-| **HTTP / REST** | The ESPHome web server exposes a REST API addressed by entity **name**, e.g. `POST http://glasscalibur-XXXXXX.local/cover/Glasscalibur/set?position=0.5` (position is `0.0`=closed … `1.0`=open), and `/cover/Glasscalibur/open`, `/close`, `/stop`. Names are case-sensitive; write a space as `%20` (e.g. `/switch/Schedule%20Enabled/turn_on`). The older lower-case object-ID form is deprecated and stops working in newer ESPHome releases. Drive it from Node‑RED, scripts, or webhooks. |
+| **Web browser** | `http://glasscalibur-XXXXXX.local` (the last six characters of the unit's MAC address). The page groups everything: Control, Motion Tuning, Calibration, Stall Detection, Schedule, tamper, Diagnostics and advanced StallGuard. |
+| **Home Assistant** | Added by the ESPHome integration as one device: the **Glasscalibur** cover plus its settings and sensors. |
+| **HTTP** | The web server's REST API, addressed by entity name, e.g. `POST /cover/Glasscalibur/open`, `/close`, `/stop`, or `/cover/Glasscalibur/set?position=0.5` (`0.0` closed … `1.0` open). Names are case‑sensitive; write a space as `%20`. |
 
-### Scheduling
+The **Button 1** on the unit: one click closes (or stops a moving window, or ends
+a calibration); a double click opens.
 
-Two browser‑editable modes, gated by a master **Schedule Enabled** switch:
+## Updates
 
-- **Fixed times** — set an **Open Time** and **Close Time**.
-- **Sunrise/sunset** — turn on **Sun Schedule**, set your **latitude/longitude**,
-  and optionally an open/close **offset** in minutes (e.g. `-30` to close 30 min
-  before sunset).
-
-### Home automation ideas
-
-Home automation is where this device shines:
-
-1. Use an indoor air‑quality sensor (e.g. Awair) to air out a stuffy room.
-2. Poll PurpleAir hourly and close the window when outdoor air goes bad.
-3. Compare indoor/outdoor temperature and cool the room when it helps.
-4. Check a weather API and close the window when rain is forecast.
-5. Open at sunrise to wake up to the birds.
-
-Full step‑by‑step guides for all of the above live in the
-[**project wiki**](https://github.com/Valar-Systems/Glasscalibur/wiki).
-
----
-
-## Repository layout
-
-| Path | Contents |
-| --- | --- |
-| [`firmware/`](/firmware) | **Current firmware** — the ESPHome entry file `glasscalibur.yaml`, its local `packages/`, and (in `esphome/`) the flashing/release guide. |
-
----
-
-## How to build it
-
-To keep it affordable, there's a kit — sourcing the screws and hardware
-individually gets expensive fast.
-
-Two kit versions are available — one with the 3D‑printed plastics and one
-without (print your own):
-
-- [Kit **excluding** 3D‑printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892240955)
-- [Kit **including** 3D‑printed parts](https://valarsystems.com/products/automatic-window-opener?variant=39590892208187)
-
-Full assembly instructions and a build video are in the
-[**Assembly Guide**](https://github.com/Valar-Systems/Glasscalibur/wiki/Assembly-Guide).
-
-## How to 3D print it
-
-The STEP files and print platter in this repository were for the old design;
-they are kept at the [`legacy-old-design`](https://github.com/Valar-Systems/Glasscalibur/tree/legacy-old-design) tag.
-
-## How to install it
-
-Installation is **fast** — a few minutes of work, then a 24‑hour wait for the
-adhesive to cure.
-
-1. Attach the **window mount** (to the sash).
-2. Attach the **sill mount**.
-3. Wait **24 hours** for the adhesives to set, then start using the opener.
-
-Both mounts are adhesive; if needed you can add a screw into the sill, but that
-hasn't been required. Full details are in the
-[**Window Installation Guide**](https://github.com/Valar-Systems/Glasscalibur/wiki/Installation-Guide).
-
----
-
-## Firmware: flashing & updates
-
-- **First flash** of a blank board is over **USB** with the ESPHome CLI
-  (`esphome run firmware/glasscalibur.yaml`) or via
-  [web.esphome.io](https://web.esphome.io).
-- After that, update **over the air**: open the web UI → **Diagnostics** →
-  **Update Firmware (GitHub)**, and the device pulls the
-  [latest release](https://github.com/Valar-Systems/Glasscalibur/releases/latest)
-  and reflashes itself.
-
-The build, release, and OTA process is documented in
-[`firmware/esphome/README.md`](/firmware/esphome/README.md).
-
----
+Open the web UI → **Diagnostics** → **Update Firmware (GitHub)**. The unit downloads
+the latest [release](https://github.com/Valar-Systems/Glasscalibur/releases/latest),
+installs it and restarts. Flashing over USB and the release process are in
+[`firmware/README.md`](firmware/README.md#flashing-and-updates). Changes are listed
+in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Documentation
 
-The [**project wiki**](https://github.com/Valar-Systems/Glasscalibur/wiki) has
-the full guides:
-
-- [3D Printing](https://github.com/Valar-Systems/Glasscalibur/wiki/3D-Printing-Guide)
-- [Assembly](https://github.com/Valar-Systems/Glasscalibur/wiki/Assembly-Guide)
-- [Window Installation](https://github.com/Valar-Systems/Glasscalibur/wiki/Installation-Guide)
-- [Wi‑Fi Setup](https://github.com/Valar-Systems/Glasscalibur/wiki/WiFi-Setup)
-- [Web UI](https://github.com/Valar-Systems/Glasscalibur/wiki/Web-UI-Guide)
-- [Motor & Stall Tuning](https://github.com/Valar-Systems/Glasscalibur/wiki/Motor-Setup)
-- [Scheduling](https://github.com/Valar-Systems/Glasscalibur/wiki/Scheduling-Guide)
-- [Security & Tamper](https://github.com/Valar-Systems/Glasscalibur/wiki/Security-and-Tamper)
-- [API](https://github.com/Valar-Systems/Glasscalibur/wiki/API-Guide)
-- [Home Assistant](https://github.com/Valar-Systems/Glasscalibur/wiki/Home-Assistant-Guide)
-- [Firmware Updates](https://github.com/Valar-Systems/Glasscalibur/wiki/Firmware-Updates)
-
----
+- [`firmware/README.md`](firmware/README.md) — flashing and updates, first setup,
+  calibration and the speed lock, the learned open stroke, faults and what to do,
+  the buttons, an entity reference and the pin map.
+- [`tools/regression-gate/`](tools/regression-gate) — the checks run on every
+  firmware change.
+- [Project wiki](https://github.com/Valar-Systems/Glasscalibur/wiki).
 
 ## License
 
-The firmware is licensed under the **GNU GPL v3** — see
-[`firmware/LICENSE`](/firmware/LICENSE).
+The firmware is licensed under the **GNU General Public License v3** — see
+[`firmware/LICENSE`](firmware/LICENSE).
 
-If this project is useful to you, you can support it via
+If this project is useful to you, you can support it through
 [GitHub Sponsors](https://github.com/sponsors/valar-systems).
