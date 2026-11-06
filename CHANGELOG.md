@@ -70,9 +70,9 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   diagnostic binary sensor. The set points are substitutions in
   `firmware/glasscalibur.yaml`. A scheduled open or close refused by the start
   gate waits: it runs once the motor reads below 50 °C, if that happens within
-  30 minutes (a later refused one replaces it; a later accepted command or a
-  STOP cancels it); otherwise it is dropped and logged. Manual commands are not
-  retried.
+  30 minutes (a later refused one replaces it; any later Open, Close or
+  Set-position, accepted or refused, or a STOP cancels it); otherwise it is
+  dropped and logged. Manual commands are not retried.
 
 ### Changed
 - Repository: the old Model-H design is removed (kept at the `legacy-old-design`

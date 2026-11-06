@@ -181,7 +181,9 @@ Other things you may see:
 kept pending (a later refused one replaces it) and runs once the motor reads below
 50 °C with the gate open, if that happens within 30 minutes; otherwise it is dropped
 and logged. It is also dropped if **Schedule Enabled** is off by then. Any later
-command the gate accepts, and any STOP, cancels it. Manual commands are not retried.
+Open, Close or Set‑position (web UI, Home Assistant, the API or Button 1), whether
+the gate accepts or refuses it, and any STOP, cancels it: the newest command wins.
+Manual commands are not retried.
 The 50 °C and 30 minutes are the `thermal_resume_c` and `thermal_pending_s`
 substitutions.
 

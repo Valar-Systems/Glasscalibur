@@ -25,7 +25,8 @@
 #   pending   a scheduled open / close the gate refused is kept (the latest one
 #             wins) and runs once the motor reads below thermal_resume_c with the
 #             gate open, if that happens within thermal_pending_s; otherwise it is
-#             dropped and logged. A later accepted command or a STOP cancels it.
+#             dropped and logged. Any later cover command (accepted or refused) or a
+#             STOP cancels it.
 #             Manual commands are not retried.
 #
 # The latch is RAM only: a restart clears it, and the start gate then refuses
@@ -217,7 +218,8 @@ script:
                    "if that happens within %d min", which == 1 ? "open" : "close",
                    (float) ${thermal_resume_c}, (int) (${thermal_pending_s} / 60));
 
-  # A later accepted command or a STOP cancels a pending scheduled move.
+  # Any later cover command (accepted or refused) or a STOP cancels a pending
+  # scheduled move.
   - id: thermal_cancel_pending
     then:
       - lambda: |-

@@ -211,9 +211,10 @@ cover:
           then:
             - script.execute: cal_abort
 
-    # Each motion action checks the thermal start gate first: refused, it only
-    # logs why and fires Thermal Alert "refused" (a move already under way is not
-    # stopped; STOP does that). Accepted, it cancels a pending scheduled move.
+    # Each motion action checks the thermal start gate first: refused, it logs
+    # why and fires Thermal Alert "refused" (a move already under way is not
+    # stopped; STOP does that). Accepted or refused, it cancels a pending
+    # scheduled move: the newest command wins.
     # Otherwise a user Open / Close / Set-position during calibration ends the
     # calibration first (cal_abort, as STOP does), then carries out the move with
     # the normal detector posture. Calibration drives through drive_open /
@@ -224,6 +225,7 @@ cover:
           condition:
             lambda: 'return ${thermal_blocked};'
           then:
+            - script.execute: thermal_cancel_pending
             - script.execute:
                 id: thermal_refused
                 what: "Open"
@@ -243,6 +245,7 @@ cover:
           condition:
             lambda: 'return ${thermal_blocked};'
           then:
+            - script.execute: thermal_cancel_pending
             - script.execute:
                 id: thermal_refused
                 what: "Close"
@@ -262,6 +265,7 @@ cover:
           condition:
             lambda: 'return ${thermal_blocked};'
           then:
+            - script.execute: thermal_cancel_pending
             - script.execute:
                 id: thermal_refused
                 what: "Set position"
