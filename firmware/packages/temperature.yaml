@@ -20,6 +20,13 @@
 #             calibration, chirp, fire Thermal Alert "lockout" / "sensor_lost".
 #   clear     a valid reading below thermal_clear_c clears the lockout and fires
 #             Thermal Alert "cleared".
+#   refused   every thermal refusal (a cover command, a scheduled move, or
+#             Auto-Calibrate) logs why and fires Thermal Alert "refused".
+#   pending   a scheduled open / close the gate refused is kept (the latest one
+#             wins) and runs once the motor reads below thermal_resume_c with the
+#             gate open, if that happens within thermal_pending_s; otherwise it is
+#             dropped and logged. A later accepted command or a STOP cancels it.
+#             Manual commands are not retried.
 #
 # The latch is RAM only: a restart clears it, and the start gate then refuses
 # until a valid reading under thermal_start_max_c arrives.
@@ -38,6 +45,15 @@ globals:
     initial_value: 'false'
   # millis() of the last valid (non-NAN) reading; 0 = none since boot.
   - id: thermal_last_ok_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  # A scheduled move the start gate refused: 0 none, 1 open, 2 close; and when.
+  - id: thermal_pending
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: thermal_pending_ms
     type: uint32_t
     restore_value: no
     initial_value: '0'
@@ -77,6 +93,18 @@ sensor:
             id(thermal_warned) = true;
             id(thermal_warn)->execute();
           }
+      # A pending scheduled move runs once the motor has cooled and the gate is open.
+      - lambda: |-
+          if (id(thermal_pending) == 0 || isnan(x) || x >= ${thermal_resume_c} || ${thermal_blocked}) return;
+          const int w = id(thermal_pending);
+          id(thermal_pending) = 0;
+          if (!id(schedule_enabled).state) {
+            ESP_LOGW("thermal", "Pending scheduled %s dropped - Schedule Enabled is off", w == 1 ? "open" : "close");
+            return;
+          }
+          ESP_LOGW("thermal", "Motor %.1f degC - running the pending scheduled %s", x, w == 1 ? "open" : "close");
+          if (w == 1) id(schedule_open)->execute();
+          else        id(schedule_close)->execute();
 
 binary_sensor:
   - platform: template
@@ -88,13 +116,13 @@ binary_sensor:
       sorting_group_id: group_diagnostics
     lambda: 'return id(thermal_lockout);'
 
-# Fires "warning", "lockout", "sensor_lost" and "cleared" (see the top of this
-# file). Home Assistant automations can trigger on it directly.
+# Fires "warning", "lockout", "sensor_lost", "cleared" and "refused" (see the top
+# of this file). Home Assistant automations can trigger on it directly.
 event:
   - platform: template
     name: "Thermal Alert"
     id: thermal_event
-    event_types: ["warning", "lockout", "sensor_lost", "cleared"]
+    event_types: ["warning", "lockout", "sensor_lost", "cleared", "refused"]
     web_server:
       sorting_weight: 6
       sorting_group_id: group_control
@@ -168,6 +196,35 @@ script:
           else
             ESP_LOGW("thermal", "%s refused - motor %.1f degC (no new moves at or above %.0f)",
                      what.c_str(), id(motor_temp).state, (float) ${thermal_start_max_c});
+      - event.trigger:
+          id: thermal_event
+          event_type: refused
+
+  # A scheduled move the gate refused: logged and announced as any refusal, then
+  # kept pending (the latest one wins; the time limit restarts). which: 1 open,
+  # 2 close.
+  - id: thermal_hold_scheduled
+    parameters:
+      which: int
+    then:
+      - script.execute:
+          id: thermal_refused
+          what: !lambda 'return which == 1 ? std::string("Scheduled open") : std::string("Scheduled close");'
+      - lambda: |-
+          id(thermal_pending) = which;
+          id(thermal_pending_ms) = millis();
+          ESP_LOGW("thermal", "Scheduled %s kept pending - it runs once the motor reads below %.0f degC, "
+                   "if that happens within %d min", which == 1 ? "open" : "close",
+                   (float) ${thermal_resume_c}, (int) (${thermal_pending_s} / 60));
+
+  # A later accepted command or a STOP cancels a pending scheduled move.
+  - id: thermal_cancel_pending
+    then:
+      - lambda: |-
+          if (id(thermal_pending) == 0) return;
+          ESP_LOGI("thermal", "Pending scheduled %s cancelled by a newer command",
+                   id(thermal_pending) == 1 ? "open" : "close");
+          id(thermal_pending) = 0;
 
   # Four short high chirps, distinct from the calibration beeps and the tamper
   # alarm.
@@ -189,10 +246,20 @@ script:
 
 interval:
   # No valid reading for thermal_stale_s (counted from boot until the first
-  # one) -> the same lockout. 500 ms: a period no other interval uses.
+  # one) -> the same lockout; and the pending scheduled move's time limit.
+  # 500 ms: a period no other interval uses.
   - interval: 500ms
     then:
       - lambda: |-
           if (!id(thermal_lockout) &&
               millis() - id(thermal_last_ok_ms) >= (uint32_t) ${thermal_stale_s} * 1000UL)
             id(thermal_trip)->execute(2);
+      # A pending scheduled move that waited thermal_pending_s is dropped.
+      - lambda: |-
+          if (id(thermal_pending) != 0 &&
+              millis() - id(thermal_pending_ms) >= (uint32_t) ${thermal_pending_s} * 1000UL) {
+            ESP_LOGW("thermal", "Pending scheduled %s dropped - the motor did not read below %.0f degC "
+                     "within %d min", id(thermal_pending) == 1 ? "open" : "close",
+                     (float) ${thermal_resume_c}, (int) (${thermal_pending_s} / 60));
+            id(thermal_pending) = 0;
+          }
