@@ -1,0 +1,13 @@
+# =============================================================================
+# BENCH ONLY — never flash this to a customer unit. Never built by CI or a release.
+# =============================================================================
+# The TP-1 test build: the bench build (glasscalibur-bench.yaml = the product plus
+# "BENCH: simulate stall") plus the TP-1 test package (tp1-bench.yaml). Nothing under
+# firmware/ changes. It reports Firmware Version "dev-tp1". Run TP-1 with tp1_run.py;
+# afterwards flash the bench build back and check the version.
+substitutions:
+  fw_version: "dev-tp1"
+
+packages:
+  bench: !include glasscalibur-bench.yaml
+  tp1: !include tp1-bench.yaml
