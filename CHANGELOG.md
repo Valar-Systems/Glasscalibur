@@ -57,6 +57,18 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   Assistant automations can trigger on it directly. It needs a stall detector
   on (StallGuard now ships on; vibration detection ships off until an
   auto-calibration enables it). The trip counters stay.
+- **Motor temperature protection**, replacing the one-shot stop at 80 °C (the
+  motor's case limit is 60 °C). At 50 °C a warning is logged; at 55 °C no new
+  motion starts (Open, Close, Set-position from the web UI, Home Assistant, the
+  API, Button 1 or a schedule, and Auto-Calibrate are refused; a move already
+  under way continues); at 60 °C, or after 15 s without a valid reading
+  (counted from boot), a thermal lockout stops motion, ends a running
+  calibration and chirps, and nothing new starts until the motor reads below
+  48 °C. STOP always works, and a stall back-off already under way finishes. New
+  **Thermal Alert** event entity (`warning`, `lockout`, `sensor_lost`,
+  `cleared`) and **Thermal Lockout** diagnostic binary sensor. The set points
+  are substitutions in `firmware/glasscalibur.yaml`. A scheduled open or close
+  refused by the start gate is not retried.
 
 ### Changed
 - Repository: the old Model-H design is removed (kept at the `legacy-old-design`
@@ -82,6 +94,11 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   back-off target stays inside the travel range, and a stall during a back-off
   just stops.
 - The **motor stops when a firmware update begins**, however it was started.
+- **At least one stall detector stays on**: switching StallGuard Enabled off
+  while Vibration Stall Detection is off is refused (it switches back on), and so
+  is the reverse. A unit that stored both off turns StallGuard on at startup.
+- The web UI's tamper group is now named **Tamper**. Entity names and IDs are
+  unchanged.
 - A reboot mid-travel now keeps the position where the motor stopped, not
   where the travel began.
 - Docs: web control URLs use the entity-name form, e.g.
