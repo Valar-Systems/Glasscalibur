@@ -37,9 +37,9 @@ jobs:
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             V="${{ github.ref_name }}"; V="${V#v}"
-            esphome -s fw_version "$V" compile firmware/esphome/Glasscalibur-esphome.yml
+            esphome -s fw_version "$V" compile firmware/glasscalibur.yaml
           else
-            esphome compile firmware/esphome/Glasscalibur-esphome.yml
+            esphome compile firmware/glasscalibur.yaml
           fi
 
       - name: Collect binaries + md5
