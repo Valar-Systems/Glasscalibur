@@ -4,7 +4,7 @@ Wi-Fi window-cover controller (ESP32-C6 + TMC2209 stepper). Control it from any
 browser at `http://glasscalibur-XXXXXX.local` (no Home Assistant required), or
 pair it with Home Assistant over the native ESPHome API.
 
-The full config lives in [`Glasscalibur-esphome.yml`](Glasscalibur-esphome.yml);
+The full config lives in [`../glasscalibur.yaml`](../glasscalibur.yaml) and its local packages in [`../packages/`](../packages);
 every setting is documented inline in that file.
 
 ## Web UI
@@ -39,7 +39,7 @@ Two ways to update once the device is already running this firmware:
   from GitHub, flashes itself, and reboots — no computer needed (requires an
   internet connection).
 - **Manually:** push a new build with the ESPHome CLI/dashboard
-  (`esphome run Glasscalibur-esphome.yml`, pick the network/OTA target), or
+  (`esphome run firmware/glasscalibur.yaml`, pick the network/OTA target), or
   upload the `*.ota.bin` in the device's own **OTA Update** web card.
 
 > The very first flash of a blank chip must be over USB (`esphome run` with the
@@ -58,11 +58,11 @@ https://github.com/Valar-Systems/Glasscalibur/releases/latest/download/Glasscali
 The asset names are **version-less and stable** (`${ota_asset}` in the YAML, =
 `Glasscalibur`) so this `latest/download/` URL never changes. To cut a release:
 
-1. **Bump the version.** Edit `firmware_version` in `Glasscalibur-esphome.yml`
+1. **Bump the version.** Edit `firmware_version` in `firmware/glasscalibur.yaml`
    (it feeds both `project.version` and the *Firmware Version* sensor).
 2. **Build the OTA image:**
    ```bash
-   esphome compile Glasscalibur-esphome.yml
+   esphome compile firmware/glasscalibur.yaml
    ```
    ESPHome writes the OTA image to
    `.esphome/build/glasscalibur/.pioenvs/glasscalibur/firmware.ota.bin`.

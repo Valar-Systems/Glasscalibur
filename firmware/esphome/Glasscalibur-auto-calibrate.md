@@ -1,7 +1,7 @@
 # Glasscalibur firmware — context for working on auto-calibration (v1.3.0)
 
 This file briefs an AI coding agent (Claude Code) working on
-`Glasscalibur-esphome.yml`. Read fully before editing. The sections marked
+`firmware/glasscalibur.yaml` (calibration lives in `firmware/packages/calibration.yaml`). Read fully before editing. The sections marked
 **INVARIANT** are safety-load-bearing; do not change their behavior without
 flagging it explicitly to the user.
 
@@ -270,7 +270,7 @@ older firmware).
 
 ## 7. Build / validation workflow
 
-- Validate: `esphome config Glasscalibur-esphome.yml` (passes on ESPHome
+- Validate: `esphome config firmware/glasscalibur.yaml` (passes on ESPHome
   2026.5.3/2026.6.5). Compile: `esphome compile`, flash: `esphome run`.
 - Expected pre-existing warnings (not yours): slimcdk `register_action`
   synchronous-parameter notices; strapping-pin warnings for GPIO5/8/15.

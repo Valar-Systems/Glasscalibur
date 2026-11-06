@@ -37,6 +37,9 @@ esphome config firmware/VAL3100/Ropener-VAL3100.yml > /tmp/new-3100.yaml
 # 2. Diff them
 python tools/regression-gate/gate.py /tmp/old-3100.yaml /tmp/new-3100.yaml
 
+# Glasscalibur (this repo): the single entry file is firmware/glasscalibur.yaml
+#   esphome config firmware/glasscalibur.yaml > /tmp/new-gc.yaml
+
 # 3. Inspect anything it flags
 python tools/regression-gate/gate.py /tmp/old-3100.yaml /tmp/new-3100.yaml \
     --detail on_stall

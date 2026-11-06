@@ -51,7 +51,7 @@ re‑calibrates its step count, so position never drifts. The board also carries
 - physical buttons (a control button and a Wi‑Fi‑reset button).
 
 The firmware is a single ESPHome configuration — see
-[`firmware/esphome/`](/firmware/esphome) for the full, heavily commented config
+[`firmware/`](/firmware) (`glasscalibur.yaml` plus `packages/`) for the full, heavily commented config
 and a flashing guide.
 
 ---
@@ -144,7 +144,7 @@ Full step‑by‑step guides for all of the above live in the
 
 | Path | Contents |
 | --- | --- |
-| [`firmware/esphome/`](/firmware/esphome) | **Current firmware** — the ESPHome config (`Glasscalibur-esphome.yml`) and a flashing/release guide. |
+| [`firmware/`](/firmware) | **Current firmware** — the ESPHome entry file `glasscalibur.yaml`, its local `packages/`, and (in `esphome/`) the flashing/release guide. |
 
 ---
 
@@ -185,7 +185,7 @@ hasn't been required. Full details are in the
 ## Firmware: flashing & updates
 
 - **First flash** of a blank board is over **USB** with the ESPHome CLI
-  (`esphome run firmware/esphome/Glasscalibur-esphome.yml`) or via
+  (`esphome run firmware/glasscalibur.yaml`) or via
   [web.esphome.io](https://web.esphome.io).
 - After that, update **over the air**: open the web UI → **Diagnostics** →
   **Update Firmware (GitHub)**, and the device pulls the

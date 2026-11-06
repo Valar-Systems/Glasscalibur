@@ -1,0 +1,259 @@
+# =============================================================================
+# Glasscalibur - the two limit switches and the learned open stroke
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+globals:
+
+  # --- Learned open limit ---
+  # The open switch (S4) trigger position in steps from the S5 zero, learned on
+  # an open that started from a fresh S5 home with no stall, and accepted only
+  # within open_learn_min_mm..open_learn_max_mm. 0 = not learned yet (the open
+  # target is then open_default_mm). Persisted; written only when an accepted
+  # value moves by more than open_persist_delta_mm, so routine opens never
+  # write flash (ESPHome saves a restore_value global only when it changes).
+  - id: open_stroke_steps
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  # Set when S5 re-zeroes the counter; cleared by any motion start. An open that
+  # starts with it set is a learning open (learn_this_open), until a stall.
+  - id: homed_fresh
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: learn_this_open
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # This motion runs to an end target (open or close), so arriving there with
+  # the switch still released is a fault. Set positions and stall back-offs
+  # leave both false.
+  - id: open_to_end
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: close_to_end
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # Counter at the S4 trigger, and any re-sync shift applied right after it, so
+  # s4_coast_report can show the coast after the stop.
+  - id: s4_trigger_pos
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: s4_shift
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # The S4 press came while OPENING (captured before the stop). Only such a
+  # press can teach the stroke; an idle press only re-syncs.
+  - id: s4_while_opening
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+binary_sensor:
+
+          # - output.turn_on: buzzer
+          # - output.ledc.set_frequency:
+          #     id: buzzer
+          #     frequency: "2700Hz"
+          # - output.set_level:
+          #     id: buzzer
+          #     level: "50%"
+          # - delay: 1s
+          # - output.turn_off: buzzer
+
+  - platform: gpio
+    name: Open Limit Switch
+    id: limit_switch_1
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_diagnostics
+    pin:
+      number: GPIO15
+      mode: INPUT
+      inverted: true
+    # Interrupts are not reliable, they constatnly miss. Use polling
+    use_interrupt: false
+    #interrupt_type: FALLING
+    filters:
+      - delayed_on: 10ms
+      # Debounce the RELEASE edge too: calibration re-reads the switch
+      # right after its wait exits, and a micro-bounce (seen on the bench
+      # with the tube loose) read "released" 9 ms after the press and
+      # false-failed homing.
+      - delayed_off: 30ms
+    on_press:
+      then:
+        # Direction-gated: act only when travel is toward this switch
+        # (opening) or idle (sash hand-moved onto the stop -> re-sync).
+        # While CLOSING away from the fully-open stop, drive-force
+        # build-up can rack the sash and re-flick this switch for
+        # ~150 ms (field 2026-07-10: three calibration close legs in a
+        # row killed ~1 s in, each blip also re-claiming position as
+        # fully open mid-close). A 150 ms contact is real, so debounce
+        # can't filter it; ignoring wrong-direction presses can.
+        - if:
+            condition:
+              lambda: 'return id(global_state) != 2;'
+            then:
+              # Stop at once: note the count at the trigger, then halt. With
+              # deceleration inf the halt writes VACTUAL 0 with no ramp past
+              # the switch; learning and re-sync happen after the stop.
+              - lambda: |-
+                  id(s4_trigger_pos) = id(driver)->current_position;
+                  id(s4_shift) = 0;
+                  id(s4_while_opening) = (id(global_state) == 1);
+              - script.execute: motion_halt     # firmware stop: never ends a calibration
+              - logger.log: "LIMIT 1 PRESSED"
+              - lambda: |-
+                  const float spm = ${steps_per_mm};
+                  const int32_t trig = id(s4_trigger_pos);
+                  const int32_t learned = id(open_stroke_steps);
+                  ESP_LOGI("limit", "S4 triggered at %d steps (%.2f mm)", (int) trig, trig / spm);
+                  id(limit_faults) &= ~2;          // the open switch works
+                  // Only a press DURING an open that started from a fresh S5
+                  // home with no stall teaches the stroke; any S4 press ends
+                  // that open's chance to.
+                  const bool learning = id(learn_this_open) && id(s4_while_opening);
+                  id(learn_this_open) = false;
+                  if (learning) {
+                    // This trigger position IS the stroke.
+                    const float mm = trig / spm;
+                    if (mm < ${open_learn_min_mm} || mm > ${open_learn_max_mm}) {
+                      id(limit_faults) |= 1;
+                      ESP_LOGW("limit", "FAULT: open switch position out of range: %.2f mm "
+                               "(accepted %.1f-%.1f mm); keeping %.2f mm",
+                               mm, ${open_learn_min_mm}, ${open_learn_max_mm}, learned / spm);
+                    } else {
+                      id(limit_faults) &= ~1;
+                      const int32_t delta = (int32_t) (${open_persist_delta_mm} * spm);
+                      if (learned <= 0) {
+                        id(open_stroke_steps) = trig;
+                        ESP_LOGI("limit", "Open stroke learned: %.2f mm (first value), saved", mm);
+                      } else if (std::abs(trig - learned) > delta) {
+                        id(open_stroke_steps) = trig;
+                        ESP_LOGI("limit", "Open stroke learned: %.2f mm (was %.2f mm), saved", mm, learned / spm);
+                      } else {
+                        ESP_LOGI("limit", "Open stroke confirmed: %.2f mm (measured %.2f mm, "
+                                 "within %.2f mm: not saved)", learned / spm, mm, ${open_persist_delta_mm});
+                      }
+                    }
+                  } else {
+                    // Not a learning open: re-sync the counter to the learned
+                    // switch position (drift correction), keeping any coast.
+                    // With nothing learned yet, to open_default_mm: that can only
+                    // over-estimate the position, so a following close runs long
+                    // and S5 stops it (never short of S5 with a false fault).
+                    const int32_t at = learned > 0 ? learned
+                                                   : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                    const int32_t now = id(driver)->current_position;
+                    id(s4_shift) = at - trig;
+                    id(driver)->report_position(now + id(s4_shift));
+                    id(driver)->set_target(now + id(s4_shift));
+                    id(global_current_position) = now + id(s4_shift);
+                    if (id(s4_shift) != 0)
+                      ESP_LOGI("limit", "S4 re-sync: counter %d -> %d steps%s", (int) trig, (int) at,
+                               learned > 0 ? "" : " (nothing learned yet: open_default_mm)");
+                  }
+              - component.update: open_stroke_sensor
+              - component.update: limit_fault_text
+              - script.execute: s4_coast_report
+              # A full travel reached its end stop -> the StallGuard tune is fine;
+              # clear any accumulated quiet-trip evidence (auto-tune).
+              - lambda: 'id(sg_quiet_streak) = 0;'
+            else:
+              - logger.log: "LIMIT 1 blip while closing - ignored"
+          
+
+  - platform: gpio
+    name: Close Limit Switch
+    id: limit_switch_2
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_diagnostics
+    pin:
+      number: GPIO3
+      mode: INPUT
+      inverted: true
+    # Interrupts are not reliable, they constatnly miss. Use polling
+    use_interrupt: false
+    #interrupt_type: FALLING
+    # Optional: filters to prevent noise from triggering the sensor
+    filters:
+      - delayed_on: 10ms
+      # See the open-limit note: release-edge debounce for the calibration
+      # homing re-check.
+      - delayed_off: 30ms
+    on_press:
+      then:
+        # Direction-gated like the open switch: ignore presses while
+        # OPENING away from the closed stop (see limit_switch_1 note).
+        - if:
+            condition:
+              lambda: 'return id(global_state) != 1;'
+            then:
+              - stepper.report_position:
+                  id: driver
+                  position: 0
+              - stepper.set_target:
+                  id: driver
+                  target: 0
+              - script.execute: motion_halt     # firmware stop: never ends a calibration
+              - logger.log: "LIMIT 2 PRESSED"
+              - lambda: |-
+                  id(sg_quiet_streak) = 0;       // clean full travel -> tune OK (auto-tune)
+                  id(homed_fresh) = true;        // the next open from here may teach the stroke
+                  id(limit_faults) &= ~4;        // the close switch works
+              - component.update: limit_fault_text
+            else:
+              - logger.log: "LIMIT 2 blip while opening - ignored"
+
+sensor:
+
+  # The learned open switch (S4) position, mm from the close switch (S5)
+  # trigger. Unknown until the first clean open from a fresh S5 home. Also
+  # refreshed right after each S4 press.
+  - platform: template
+    name: "Open stroke"
+    id: open_stroke_sensor
+    unit_of_measurement: "mm"
+    accuracy_decimals: 2
+    update_interval: 60s
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 8
+      sorting_group_id: group_diagnostics
+    lambda: |-
+      if (id(open_stroke_steps) <= 0) return NAN;
+      return id(open_stroke_steps) / ${steps_per_mm};
+
+script:
+
+  # Logs where the motor actually stopped after an S4 trigger, so the coast past
+  # the switch is visible (it should be a few steps: the stop is immediate).
+  # Shown in the trigger's counter frame, i.e. before any re-sync shift.
+  - id: s4_coast_report
+    mode: restart
+    then:
+      - delay: 300ms
+      - lambda: |-
+          const float spm = ${steps_per_mm};
+          if (id(global_state) != 0) {
+            ESP_LOGI("limit", "S4 stop: motion resumed within 300 ms - coast not read");
+            return;
+          }
+          const int32_t stopped = id(driver)->current_position - id(s4_shift);
+          const int32_t coast = stopped - id(s4_trigger_pos);
+          if (std::abs(coast) > (int32_t) (${coast_limit_mm} * spm)) {
+            ESP_LOGW("limit", "S4 stop: motor stopped at %d steps, coast %d steps (%.3f mm) - over the %.1f mm limit",
+                     (int) stopped, (int) coast, coast / spm, ${coast_limit_mm});
+          } else {
+            ESP_LOGI("limit", "S4 stop: motor stopped at %d steps, coast %d steps (%.3f mm)",
+                     (int) stopped, (int) coast, coast / spm);
+          }

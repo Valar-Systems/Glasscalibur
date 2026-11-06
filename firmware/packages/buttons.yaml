@@ -1,0 +1,215 @@
+# =============================================================================
+# Glasscalibur - Button 1, the Wi-Fi / calibrate button and Child Lock
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Physical buttons + end-stop limit switches
+# -----------------------------------------------------------------------------
+# Button 1 (GPIO23): single click cycles between dismiss-alarm / stop-motor
+#   / close-cover based on global_state; double click opens the cover.
+# Limit switches (GPIO15 open = S4, GPIO3 close = S5): when triggered, stop the
+#   cover at once and fix the position: S5 re-zeroes the counter; S4 teaches
+#   the open stroke (learning open) or re-syncs the counter to it (drift
+#   correction). IDLE-state cleanup comes from motion_halt. Presses are direction-
+#   gated: a switch acts only when travel is toward it (or idle) — a press
+#   while moving AWAY is a mechanical blip and is logged then ignored, never
+#   allowed to stop motion or rewrite position. Both are polled rather
+#   than interrupt-driven because polling proved more reliable in testing.
+# WiFi Reset (GPIO21): long press wipes saved credentials and reboots into
+#   captive-portal setup mode.
+# Tamper / accel-interrupt sensors live at the end of this block.
+binary_sensor:
+  # Core defines btn1/btn2/btn3 as bare inputs. Glasscalibur has only two
+  # buttons, so drop core's phantom Button 2 and its Wi-Fi button — this product
+  # keeps its own "WiFi Reset" entity (btn_wifi_reset, below). btn1 keeps core's
+  # pin/name/filters (identical: GPIO ${pin_btn1}, INPUT, inverted, delayed_on
+  # 10ms) and just gains the product's click behaviour.
+  - id: !remove btn2
+  - id: !remove btn3
+  - id: !extend btn1
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_control
+    on_multi_click:
+
+      # --- Single Click ---
+      # CALIBRATING             -> abort the calibration sequence. This check
+      #                            deliberately PRECEDES Child Lock: stopping
+      #                            an autonomous multi-travel sequence is a
+      #                            safety control and must never be lockable.
+      # TAMPERED                -> silence the alarm + return to IDLE.
+      # OPENING or CLOSING      -> stop (stop_action sets state to IDLE).
+      # Otherwise (IDLE)        -> close (close_action sets state to CLOSING).
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - if:
+              condition:
+                lambda: 'return id(cal_active);'
+              then:
+                # The cover's STOP ends a running calibration from every
+                # source (stop_action -> motion_halt, then cal_abort), so the
+                # button takes the same path as the web UI and Home Assistant.
+                - cover.stop: glasscalibur_cover
+                # Swallow the click — don't fall through to stop/close.
+              else:
+                - if:
+                    condition:
+                      lambda: 'return id(child_lock).state;'
+                    then:
+                      - logger.log: "Child lock on — single click ignored"
+                    else:
+                      - if:
+                          condition:
+                            lambda: 'return id(global_state) == 3;'
+                          then:
+                            - script.stop: tamper_alarm
+                            - output.turn_off: buzzer
+                            - globals.set:
+                                id: tamper_detected
+                                value: "false"
+                            - globals.set:
+                                id: global_state
+                                value: "0"
+                            - logger.log: "Tamper alarm dismissed via button"
+                          else:
+                            - if:
+                                condition:
+                                  lambda: 'return id(global_state) == 1 || id(global_state) == 2;'
+                                then:
+                                  - cover.stop: glasscalibur_cover
+                                else:
+                                  - cover.close: glasscalibur_cover
+          # - if:
+          #     condition: ## If moving, then stop
+          #       lambda: return (id(glasscalibur_cover).current_operation != COVER_OPERATION_IDLE); # Should evaluate to TRUE if moving
+          #     then:
+          #       - cover.stop: glasscalibur_cover
+          #     else: ## If not moving, then close
+          #       - cover.close: glasscalibur_cover
+
+          # - output.turn_on: buzzer
+          # - output.ledc.set_frequency:
+          #     id: buzzer
+          #     frequency: "2700Hz"
+          # - output.set_level:
+          #     id: buzzer
+          #     level: "50%"
+          # - delay: 1s
+          # - output.turn_off: buzzer
+
+      # --- Double Click ---
+      # Ignored while calibrating: launching a new motion mid-sequence would
+      # corrupt the probe in progress (single-click aborts instead).
+      - timing:
+          - ON for at most 1.0s
+          - OFF for at most 0.3s
+          - ON for at most 1.0s
+          - OFF for at least 0.5s
+        then:
+          - if:
+              condition:
+                lambda: 'return id(cal_active);'
+              then:
+                - logger.log: "Calibrating — double click ignored (single click aborts)"
+              else:
+                - if:
+                    condition:
+                      lambda: 'return id(child_lock).state;'
+                    then:
+                      - logger.log: "Child lock on — double click ignored"
+                    else:
+                      - cover.open: glasscalibur_cover
+
+  # Calibration / WiFi Reset (GPIO21) — two gestures, non-overlapping timings:
+  #   * 7 quick presses (each ≤ 0.6 s) -> start auto-calibration. Seven is
+  #     deliberate: calibration drives the window through its full travel, so
+  #     the trigger must be impossible to hit accidentally (a stray
+  #     double-tap used to be enough). The script still announces itself
+  #     (3 beeps + 2 s) before any motion and refuses if the device is busy,
+  #     tampered, or the motor is hot.
+  #   * Hold 3-10 s -> erase saved Wi-Fi credentials and reboot into setup
+  #     mode. A long hold is required (not a quick tap) so the device can't
+  #     be knocked offline by an accidental press. On reboot the device
+  #     re-runs Wi-Fi setup: with no credentials saved (and none compiled
+  #     into the firmware), it broadcasts the "glasscalibur-XXXXXX" hotspot /
+  #     captive portal so a new network can be entered (Improv over USB
+  #     serial works too).
+  # A calibration press can never satisfy the 3 s minimum hold, so the two
+  # gestures cannot both fire from one input.
+  - platform: gpio
+    name: WiFi Reset
+    id: btn_wifi_reset
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_diagnostics
+    pin:
+      number: GPIO21
+      mode: INPUT
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+    on_multi_click:
+      - timing:
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at most 0.4s
+          - ON for at most 0.6s
+          - OFF for at least 0.3s
+        then:
+          - logger.log: "CAL: requested via calibration button (7 presses)"
+          - script.execute: auto_calibrate
+    on_click:
+      - min_length: 3000ms
+        max_length: 10000ms
+        then:
+          - logger.log: "Clearing saved Wi-Fi credentials and rebooting into setup"
+          - lambda: |-
+              // Overwrite the persisted credentials in flash with empty values,
+              // then drop the in-memory copy so nothing is re-saved on teardown.
+              esphome::wifi::global_wifi_component->save_wifi_sta("", "");
+              esphome::wifi::global_wifi_component->clear_sta();
+          - delay: 1s                          # let the log flush before we restart
+          - lambda: "App.safe_reboot();"
+
+  # (Latitude / Longitude / Sun Open Offset / Sun Close Offset come from the
+  # scheduling mixin.)
+
+# -----------------------------------------------------------------------------
+# Child lock
+# -----------------------------------------------------------------------------
+# When ON, the physical Button 1 (single + double click) is ignored so the
+# cover can't be opened, closed, or stopped from the on-device button — e.g. to
+# keep a child from operating it. Remote control is intentionally unaffected:
+# the web UI, Home Assistant, and the open/close schedule all keep working, so
+# you can still operate the cover and toggle this lock from your phone. The
+# WiFi-reset button (GPIO21) is also left active so the device can always be
+# recovered. Persists across reboots; default OFF so a fresh unit is never
+# locked.
+switch:
+  - platform: template
+    name: "Child Lock"
+    id: child_lock
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_control
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - logger.log: "Child lock enabled — physical button disabled"
+    turn_off_action:
+      - logger.log: "Child lock disabled — physical button active"

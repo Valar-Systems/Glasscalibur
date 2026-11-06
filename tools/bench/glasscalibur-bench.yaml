@@ -8,7 +8,7 @@
 # only while the cover is moving and does what the TMC2209 on_stall handler does:
 # stop the motor, then stall_response. The release targets never include it.
 packages:
-  glasscalibur: !include ../../firmware/esphome/Glasscalibur-esphome.yml
+  glasscalibur: !include ../../firmware/glasscalibur.yaml
 
 button:
   - platform: template

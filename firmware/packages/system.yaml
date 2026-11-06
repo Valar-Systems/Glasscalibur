@@ -1,0 +1,261 @@
+# =============================================================================
+# Glasscalibur - external components, api, ota, logger, the i2c bus, the stop-on-update boot hook
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+# =============================================================================
+# Glasscalibur — ESPHome firmware
+# =============================================================================
+#
+# A Wi-Fi connected window-cover controller that drives a NEMA stepper motor
+# via a TMC2209 driver, with physical end-stop limit switches at both ends of
+# travel for absolute position calibration. Control it via a browser at
+# http://glasscalibur-XXXXXX.local (where XXXXXX is the last 3 bytes of the
+# device's MAC, printed on the serial log at boot). No Home Assistant
+# required. Can also pair with Home Assistant over the native ESPHome API.
+#
+# -----------------------------------------------------------------------------
+# Hardware
+# -----------------------------------------------------------------------------
+#   MCU       : ESP32-C6-MINI-1 (esp-idf framework, USB-Serial-JTAG console)
+#   Driver    : TMC2209 stepper driver, single-wire UART control (PDN_UART)
+#   Motor     : NEMA stepper, 8x microstepping = 1600 steps/rev
+#   End stops : two physical limit switches (one at each end of travel)
+#   Sensors   : TMP1075 motor temperature (I2C 0x49) — auto-stops at >80 °C
+#               LIS2DH12 accelerometer (I2C 0x19) — anti-tamper + vib stall
+#   Buzzer    : passive piezo on a ledc PWM output (tamper alarm)
+#
+# -----------------------------------------------------------------------------
+# GPIO wiring
+# -----------------------------------------------------------------------------
+#   GPIO0  : UART RX   <- TMC2209 PDN_UART
+#   GPIO1  : UART TX   -> TMC2209 PDN_UART
+#   GPIO3  : Close-end limit switch (active low, polled)
+#   GPIO5  : Buzzer (ledc output)
+#   GPIO6  : INDEX     (TMC2209 step-counter output, informational)
+#   GPIO8  : ENN       (TMC2209 enable, active low)
+#   GPIO14 : DIAG      (TMC2209 StallGuard / fault output -> on_stall)
+#   GPIO15 : Open-end limit switch (active low, polled)
+#   GPIO21 : Calibration / Wi-Fi Reset button (active low; 7 quick presses =
+#            auto-calibrate, hold 3-10 s to clear Wi-Fi creds — the timings
+#            must never overlap)
+#   GPIO19 : I2C SDA
+#   GPIO20 : I2C SCL
+#   GPIO23 : Button 1 (active low; single/double click)
+#
+# -----------------------------------------------------------------------------
+# Position / motion model
+# -----------------------------------------------------------------------------
+#   Steps are the canonical position unit, counted from the close switch (S5)
+#   trigger = 0 at steps_per_mm (board wrapper). The cover entity reports
+#   position as a 0..1 ratio of the open stroke:
+#
+#       position = current_position / stroke                  (0.0 .. 1.0)
+#
+#   stroke is the LEARNED open-switch (S4) trigger position (open_stroke_steps,
+#   persisted), or open_default_mm before anything is learned. An open drives to
+#   stroke + open_margin_mm (open_default_mm before learning) and stops on S4; a
+#   close drives to -close_overtravel_mm and stops on S5. S5 re-zeroes the
+#   counter; S4 either teaches the stroke (an open that started from a fresh S5
+#   home with no stall) or re-syncs the counter to it. Reaching either target
+#   without its switch stops there and raises a fault (the "Fault" sensor).
+#   Position is saved at every IDLE transition, refreshed every 200 ms while
+#   moving, and captured once more at shutdown, so the cover survives reboots
+#   (including one mid-travel) without re-homing.
+#
+# -----------------------------------------------------------------------------
+# State machine (global_state, mirrored to the "State" text_sensor)
+# -----------------------------------------------------------------------------
+#   0 = IDLE      no motion in progress
+#   1 = OPENING   driving toward the open target
+#   2 = CLOSING   driving toward 0
+#   3 = TAMPERED  tamper detected; alarm active or pending acknowledgement
+#
+#   OPENING/CLOSING return to IDLE via the 200 ms motion-completion poll
+#   (target reached — including the end of a stall back-off, which shows its
+#   real direction while it runs) or motion_halt (user STOP, limit switch,
+#   temperature cutoff, calibration, a stall during a back-off). TAMPERED is
+#   a *soft indicator* —
+#   subsequent motion commands override it; it only returns to IDLE on
+#   explicit acknowledgement (Button 1 single-click, "Clear Tamper Alert",
+#   or "Set Tamper Baseline").
+#
+# -----------------------------------------------------------------------------
+# Buttons (physical, on the device)
+# -----------------------------------------------------------------------------
+#   Button 1 (GPIO23):
+#     - Single click  : CALIBRATING     -> abort calibration (works even with
+#                                          Child Lock on — stopping an
+#                                          autonomous sequence is a safety
+#                                          control, never lockable)
+#                       TAMPERED        -> silence alarm + return to IDLE
+#                       OPENING/CLOSING -> stop motor
+#                       IDLE            -> close the cover
+#     - Double click  : open the cover (ignored while calibrating)
+#   Calibration / WiFi Reset (GPIO21):
+#     - 7 quick clicks: start auto-calibration (see the auto_calibrate script)
+#     - Hold 3-10 s   : clear saved Wi-Fi credentials and reboot into setup
+#
+# -----------------------------------------------------------------------------
+# Anti-tamper (accelerometer-based)
+# -----------------------------------------------------------------------------
+#   The LIS2DH12 establishes a "rest orientation" baseline (stored in g;
+#   live m/s² readings are normalized before comparing). While IDLE, a
+#   1 s interval compares live x/y/z to the baseline; if Euclidean distance
+#   exceeds the Tamper Threshold, the device enters TAMPERED state, latches
+#   "Tamper Detected", and pulses the buzzer for 60 s. The alarm dismisses
+#   via Button 1 single-click, "Clear Tamper Alert", or "Set Tamper Baseline"
+#   (which also captures a new baseline at the current position).
+#
+#   Off by default. Turning the "Tamper Detection" switch ON auto-captures
+#   the current accel reading as the baseline — no separate Set Baseline
+#   press needed.
+#
+# -----------------------------------------------------------------------------
+# Vibration-based stall (secondary to TMC2209 StallGuard)
+# -----------------------------------------------------------------------------
+#   While OPENING/CLOSING, a 200 ms interval samples
+#       vibration = |sqrt(x² + y² + z²)/9.80665 - 1|   [g]
+#   from the accelerometer — an orientation-independent measure of non-gravity
+#   acceleration. UNITS MATTER: the LIS2DH12 sensors publish m/s² (ESPHome
+#   convention) while every threshold in this config is in g — each consumer
+#   divides by 9.80665 before comparing. If vibration exceeds Vibration
+#   Threshold for Vibration Stall Samples distinct sensor samples, the same
+#   stop+IDLE+save-position path runs as on_stall. Auto-calibration tunes the
+#   threshold; or tune by watching the Accel X/Y/Z sensors during a clean
+#   move vs. a deliberately stalled one.
+#
+# -----------------------------------------------------------------------------
+# Daily schedule (browser-editable, no Home Assistant required)
+# -----------------------------------------------------------------------------
+#   Web UI fields:
+#     - "Open Time" / "Close Time" : daily times to open / close
+#     - "Schedule Enabled"         : master on/off (default OFF)
+#     - "Timezone"                 : POSIX TZ string (default UTC0)
+#   With the schedule enabled, the cover opens at Open Time and closes at
+#   Close Time every day. All four settings persist across reboots. Requires
+#   a network connection for SNTP time.
+#
+# -----------------------------------------------------------------------------
+# Wi-Fi provisioning (no secrets required)
+# -----------------------------------------------------------------------------
+#   This firmware ships without hardcoded Wi-Fi credentials. On a fresh flash
+#   (or after a Wi-Fi reset via the GPIO21 button), the device broadcasts a
+#   "glasscalibur-XXXXXX" hotspot and the captive portal prompts for your
+#   network. Improv over USB-Serial-JTAG also works (e.g. web.esphome.io).
+#   Credentials are saved to flash and survive reboots and OTA updates.
+#
+#   secrets.yaml is only needed if you enable the optional native-API
+#   encryption key — see the Home Assistant pairing note below.
+#
+#   Non-HA users: open http://glasscalibur-XXXXXX.local in a browser to
+#   control the device (replace XXXXXX with the MAC suffix from the boot log).
+#
+# -----------------------------------------------------------------------------
+# Home Assistant pairing note
+# -----------------------------------------------------------------------------
+#   The native API runs without encryption by default. Home Assistant will
+#   show a warning when you first add the device ("Communication not
+#   encrypted"). The device works normally despite this warning. To silence
+#   it, generate a key and add it to secrets.yaml, then uncomment the
+#   encryption block in the `api:` section below:
+#
+#     api:
+#       encryption:
+#         key: !secret api_key          # 32-byte base64 string
+#
+#   Generate a key with:
+#     python3 -c "import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+# =============================================================================
+
+# External components.
+# - slimcdk: TMC2209 driver + custom stepper component with on_stall trigger,
+#   StallGuard configuration, register-level UART access.
+# - valar-systems: Valar fork of latonita's draft LIS2DH12 PR (esphome#14788)
+#   with four fixes — stale-sample guard, throttled loop() reads, optional
+#   data-ready interrupt pin, and on-chip high-pass filter support.
+# Both pinned to the exact commits v2.1.0 was built from (each was its repo's
+# head at release time), so a rebuild is reproducible. Unpinned, they followed
+# whatever each default branch held on build day. slimcdk is the same commit
+# valar-core pins. Bump only deliberately, with the regression gate.
+external_components:
+  - source: github://slimcdk/esphome-custom-components@b5f0e44ae8732f68b9bbeaed9e962ca052d04cdb
+    components: [tmc2209_hub, tmc2209, stepper]
+
+  - source: github://Valar-Systems/esphome-lis2dh12@f9cbb99993f8ecee9e224e94e19a23b8aaf8e445
+    components: [lis2dh12_base, lis2dh12_i2c]
+# -----------------------------------------------------------------------------
+# Product-layer overrides of shared infrastructure
+# -----------------------------------------------------------------------------
+# Substitutions (mechanical + OTA identity) moved to the board wrapper. api, ota,
+# http_request, safe_mode, wifi, captive_portal, improv_serial, time and sun all
+# come from valar-core / the scheduling mixin. Only the product-specific slivers
+# of api, logger and web_server remain here; package merge folds them into core's.
+
+# The API's reboot_timeout defaults to 15 min: if no *API* client connects in
+# that window the device reboots. It counts native-API clients only — a browser
+# on the web UI is not one. The Glasscalibur is sold as working without Home
+# Assistant, so a customer driving it purely from the browser got a controller
+# that rebooted every 15 minutes, stopping the window mid-travel if it happened
+# to be moving. 0 = never reboot for lack of a client.
+#
+# Trade-off: this also removes the watchdog that recovers a wedged API
+# connection. Acceptable here — the users it was rebooting are the ones not
+# using the API at all — and safe_mode still covers boot loops.
+api:
+  reboot_timeout: 0s
+
+# Log-only. Its real job: ESPHome compiles in the OTA listener interface used by
+# the stop-on-update listener (on_boot, priority 900) only when some OTA
+# platform has an on_* trigger. This merges into core's esphome OTA entry.
+ota:
+  - platform: esphome
+    on_begin:
+      - logger.log: "Firmware update starting"
+# Add the LIS2DH12 i2c-poll log silencing to core's logger. Package merge folds
+# this logs map into core's (core owns the console uart + base level).
+logger:
+  logs:
+    # Silence the LIS2DH12 status-poll chatter (~50 i2c.idf lines per sample).
+    i2c.idf: INFO
+    lis2dh12: INFO
+
+esphome:
+  on_boot:
+    # The motor stops when a firmware update begins, however it was started
+    # (ESPHome, the device's own web page, or the "Update Firmware (GitHub)"
+    # button). Every OTA platform reports the start of an update to ESPHome's
+    # global OTA callback; this listener answers OTA_STARTED with the cover's
+    # normal STOP, so stop_action runs exactly as if the user had pressed STOP.
+    # Registered once at boot; the callback object is created on first use.
+    - priority: 900
+      then:
+        - lambda: |-
+            struct StopOnUpdate : public ota::OTAGlobalStateListener {
+              void on_ota_global_state(ota::OTAState state, float progress, uint8_t error,
+                                       ota::OTAComponent *component) override {
+                if (state != ota::OTA_STARTED) return;
+                ESP_LOGI("update", "Firmware update starting - stopping the motor");
+                id(glasscalibur_cover).make_call().set_command_stop().perform();
+              }
+            };
+            static StopOnUpdate stop_on_update;
+            ota::get_global_ota_callback()->add_global_state_listener(&stop_on_update);
+# (Open Time / Close Time datetime pickers and the Timezone text entity come from
+# the scheduling mixin. The mixin's fixed-time and sun triggers call this product's
+# schedule_open / schedule_close scripts, which carry the !cal_active guard — see
+# the script block below.)
+
+# -----------------------------------------------------------------------------
+# I2C bus (shared by TMP1075 temperature sensor + LIS2DH12 accelerometer)
+# -----------------------------------------------------------------------------
+# scan: true prints all detected device addresses on boot — useful if the
+# LIS2DH12 ends up at 0x18 instead of 0x19 on a particular board, or if the
+# accel block fails to initialize.
+i2c:
+  sda: GPIO19
+  scl: GPIO20
+  scan: true
+  id: i2c_bus

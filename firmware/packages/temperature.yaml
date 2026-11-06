@@ -1,0 +1,33 @@
+# =============================================================================
+# Glasscalibur - motor temperature and the 80 C cutoff
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+sensor:
+
+  # (SG_RESULT and TSTEP diagnostic sensors come from core — sen_sgresult /
+  # sen_tstep. Scripts read the registers directly, so nothing here depends on
+  # the product's former "… Sensor" copies.)
+
+  - platform: tmp1075
+    name: "Motor Temperature"
+    id: motor_temp     # referenced by the auto_calibrate temperature gate
+    update_interval: 3s
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 7
+      sorting_group_id: group_diagnostics
+    i2c_id: i2c_bus
+    address: 0x49
+    accuracy_decimals: 2
+    # --- ACTION ON TEMPERATURE EXAMPLE ---
+    on_value_range:
+      - above: 80
+        then:
+          # During calibration, end it as a thermal abort (result 4) before the
+          # STOP; outside calibration cal_thermal_guard does nothing.
+          - script.execute: cal_thermal_guard
+          - cover.stop: glasscalibur_cover
+          - logger.log: "TOO HOT!"

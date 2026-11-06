@@ -1,0 +1,627 @@
+# =============================================================================
+# Glasscalibur - the cover, motion scripts, speed / acceleration / current, position save and restore
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+globals:
+  # The tuning globals (global_speed, global_acceleration, global_irun,
+  # global_sgthrs, global_tcoolthrs) now come from valar-core, and the
+  # sun-schedule globals (global_latitude, global_longitude, global_sun_*) from
+  # the scheduling mixin — both are defined there, not here. This product's
+  # former global_max_speed is now core's global_speed (renamed throughout).
+  # irun stays ≤ 19 via num_irun's lowered max_value and the on_boot clamp.
+
+  # Cover state machine. Not persisted — every reboot starts IDLE, since the
+  # motor is not actually moving at that point.
+  #   0 = IDLE     no motion in progress
+  #   1 = OPENING  driving toward the open target
+  #   2 = CLOSING  driving toward the close target (or a set position)
+  #   3 = TAMPERED tamper detected; cleared by "Clear Tamper Alert" or
+  #                "Set Tamper Baseline" buttons. Tracks tamper_detected.
+  # Mirrored to HA via the "State" text_sensor. Transitions back to IDLE
+  # happen in motion_halt (the user's STOP, the limit switches, calibration,
+  # a stall that just stops) and in the 200 ms completion poll (target reached,
+  # including the end of a stall back-off, which reports its real direction).
+  - id: global_state
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Last known stepper position in steps. Persisted so the cover entity
+  # survives reboots without re-homing. Saved at IDLE transitions (stop_action,
+  # on_stall, natural target arrival), refreshed by the 200 ms poll while moving
+  # (as the Ropener does), and captured from the driver at shutdown (on_shutdown
+  # below). It used to be saved at IDLE transitions only, so a reboot mid-travel
+  # restored the position the travel STARTED from. RAM-only per tick: ESPHome
+  # flushes changed globals to flash at most once a minute, and at shutdown.
+  - id: global_current_position
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+  # Timestamp (millis()) at which the current motion command started. Used by
+  # the vib-stall check to skip its first ~500 ms after launch — initial motor
+  # torque can spike the accelerometer hard enough to false-trip before the
+  # mechanism reaches steady-state. Set in open_action / close_action /
+  # position_action; not persisted (only meaningful while motion is active).
+  - id: motion_start_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+# -----------------------------------------------------------------------------
+# Device identity + boot-time motor configuration
+# -----------------------------------------------------------------------------
+# on_boot:
+#   1. Restore last saved position so HA cover state is accurate.
+#   2. Override with limit-switch ground truth if either is currently pressed.
+#   3. Apply persisted speed / acceleration to the stepper.
+#   4. Configure TMC2209: direction, microsteps, TCOOLTHRS, StallGuard, currents.
+#   5. Re-apply the user's saved timezone (restore doesn't re-fire set_action).
+esphome:
+  # name / friendly_name / project come from the board wrapper and core. The
+  # motor configure/stallguard/currents, speed/accel, and firmware-version publish
+  # are all done by core's priority-600 on_boot (direction = COUNTERCLOCKWISE via
+  # the board's motor_direction_default). Timezone / lat-long re-apply is done by
+  # the scheduling mixin's priority -100 on_boot. This product adds only what core
+  # can't know about: the current clamp and limit-switch homing.
+  # Capture where the motor actually is at every soft reboot (Restart button,
+  # end of a firmware update, any App.reboot). ESPHome runs on_shutdown hooks in
+  # reverse setup-priority order, so at priority 600 this runs before the
+  # globals store their values (800) and before the preference syncer flushes
+  # them to flash (1000) — the saved position is the stop point, not the start
+  # of the travel. A power cut skips shutdown; the 200 ms refresh covers that.
+  on_shutdown:
+    - priority: 600
+      then:
+        - lambda: 'id(global_current_position) = id(driver)->current_position;'
+  on_boot:
+    # BEFORE core configures the driver (core boots at priority 600): clamp the
+    # restored motor current. Units upgraded from firmware that allowed irun up to
+    # 31 restore the old value from flash; core's currents would otherwise push it
+    # straight to the driver. 19 = rated 0.6 A; the motor's 60 °C case limit leaves
+    # no headroom above that. num_irun's lowered max_value caps new entries too.
+    - priority: 650
+      then:
+        - lambda: 'if (id(global_irun) > 19) id(global_irun) = 19;'
+    # AFTER core has configured the driver and applied speed/accel (priority 600):
+    # establish the true position. Restore the last saved position, then let a
+    # currently-pressed limit switch override it with mechanical ground truth.
+    # (Position counter vs. driver registers are independent, so running this
+    # after core's configure is equivalent to the pre-rewire single-trigger boot.)
+    - priority: 500
+      then:
+        - stepper.report_position:
+            id: driver
+            position: !lambda "return id(global_current_position);"
+        - stepper.set_target:
+            id: driver
+            target: !lambda "return id(global_current_position);"
+        - logger.log: "CHECKING LIMIT SWITCHES"
+        - if:
+            condition:
+              binary_sensor.is_on: limit_switch_1
+            then:
+              - logger.log: "SETTING LIMIT 1"
+              # The open switch is at the learned stroke (open_default_mm
+              # before anything is learned).
+              - stepper.report_position:
+                  id: driver
+                  position: !lambda |-
+                    return id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                     : (int32_t) (${open_default_mm} * ${steps_per_mm});
+              - stepper.set_target:
+                  id: driver
+                  target: !lambda "return id(driver)->current_position;"
+        - if:
+            condition:
+              binary_sensor.is_on: limit_switch_2
+            then:
+              - logger.log: "SETTING LIMIT 2"
+              - stepper.report_position:
+                  id: driver
+                  position: 0
+              - stepper.set_target:
+                  id: driver
+                  target: 0
+              - globals.set:
+                  id: homed_fresh
+                  value: 'true'
+        # Uncalibrated fail-safe. A unit calibrated by an earlier firmware counts
+        # as calibrated (cal_speed_at is only ever written by a successful run).
+        # Then the speed: core applied the user's speed at 600; until calibration
+        # has succeeded every move runs at the Fast preset instead.
+        - lambda: |-
+            if (!id(sg_calibrated) && id(cal_speed_at) != 0) {
+              id(sg_calibrated) = true;
+              ESP_LOGI("cal", "Earlier successful calibration found - StallGuard calibrated");
+            }
+            // Calibrated by older firmware (cal_speed not yet recorded): the speed
+            // that calibration recorded (cal_speed_at, same success branch) is the
+            // speed its StallGuard tune is valid for. A setting changed since then
+            // is an ordinary mismatch: moves run at the recorded speed until a
+            // calibration at the new setting succeeds. Only with no recorded speed
+            // is the current setting assumed.
+            if (id(sg_calibrated) && id(cal_speed) == 0) {
+              if (id(cal_speed_at) != 0) {
+                id(cal_speed) = id(cal_speed_at);
+                ESP_LOGI("cal", "Calibrated speed from the earlier calibration: %d steps/s "
+                         "(speed setting %d)", id(cal_speed_at), id(global_speed));
+              } else {
+                id(cal_speed) = id(global_speed);
+                ESP_LOGW("cal", "No speed recorded with the earlier calibration - assumed the current "
+                         "setting %d steps/s as the calibrated speed", id(global_speed));
+              }
+            }
+            if (!id(sg_calibrated))
+              ESP_LOGI("cal", "Not calibrated - speed locked to Fast until calibration has run");
+            else if (id(global_speed) != id(cal_speed))
+              ESP_LOGW("cal", "Speed setting %d differs from the calibrated speed %d - running at %d "
+                       "until a calibration at the new speed", id(global_speed), id(cal_speed), id(cal_speed));
+        - stepper.set_speed:
+            id: driver
+            speed: !lambda "return ${effective_speed};"
+
+# -----------------------------------------------------------------------------
+# The cover entity (Home Assistant)
+# -----------------------------------------------------------------------------
+# Template cover backed by the TMC2209 stepper. Position is reported live as a
+# 0..1 ratio of current_position / the learned open stroke.
+#   - open_action     : drive to the open target (learned stroke + margin) and
+#                       stop on the open switch (position 1.0)
+#   - close_action    : drive to -close_overtravel_mm and stop on the close
+#                       switch (position 0.0)
+#   - position_action : 100 % / 0 % run the open / close above; any other
+#                       fraction is a proportional move — direction is
+#                       inferred by comparing the new target to current_position
+#   - stop_action     : halt + flip state to IDLE + persist position
+#
+# Each motion action also updates global_state so the "State" text_sensor and
+# automations follow along. The motion-completion poll (interval block at the
+# bottom of this file) flips current_operation back to IDLE once the stepper
+# reaches its target.
+cover:
+  - platform: template
+    id: glasscalibur_cover
+    name: Glasscalibur
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_control
+    has_position: true
+    # 1.0 = the learned open switch position (open_default_mm before learning).
+    lambda: |-
+      const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                      : (int32_t) (${open_default_mm} * ${steps_per_mm});
+      float p = float(id(driver)->current_position) / float(stroke);
+      return p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
+
+    # stop_action is the USER's STOP: web UI, Home Assistant, the API, Button 1,
+    # the 80 °C cutoff and the stop-on-update listener. It halts at once and, if
+    # a calibration is running, ends it. The firmware's own stops (limit
+    # switches, calibration legs, stall handling) call motion_halt directly, so
+    # they never end a calibration by accident.
+    stop_action:
+      - logger.log: "COVER stop_action"
+      - script.execute: motion_halt
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
+
+    # A user Open / Close / Set-position during calibration ends the calibration
+    # first (cal_abort, as STOP does), then carries out the move with the normal
+    # detector posture. Calibration drives through drive_open / drive_close
+    # directly, so its own travels never abort it.
+    open_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
+      - logger.log: "COVER open_action"
+      - script.execute: drive_open
+
+    close_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
+      - logger.log: "COVER close_action"
+      - script.execute: drive_close
+
+    position_action:
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
+      - logger.log: "COVER position_action"
+      # 100 % and 0 % are the full open and close: their end targets, the limit
+      # switches and the learned stroke all apply. Anything between is a plain
+      # proportional move on the learned stroke.
+      - if:
+          condition:
+            lambda: 'return pos >= 1.0f;'
+          then:
+            - script.execute: drive_open
+          else:
+            - if:
+                condition:
+                  lambda: 'return pos <= 0.0f;'
+                then:
+                  - script.execute: drive_close
+                else:
+                  - lambda: |-
+                      id(motion_start_ms) = millis();
+                      id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+                      id(sg_fired_this_move) = false;
+                      id(stall_release_active) = false; // a new move gets its own stall release
+                      id(homed_fresh) = false;          // any motion ends a fresh home
+                      id(learn_this_open) = false;
+                      id(open_to_end) = false;
+                      id(close_to_end) = false;
+                  # Direction is inferred by comparing the new target to current_position.
+                  - if:
+                      condition:
+                        lambda: |-
+                          const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                          : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                          return (int32_t) (pos * stroke) >= id(driver)->current_position;
+                      then:
+                        - globals.set:
+                            id: global_state
+                            value: "1"
+                        - cover.template.publish:
+                            id: glasscalibur_cover
+                            current_operation: OPENING
+                      else:
+                        - globals.set:
+                            id: global_state
+                            value: "2"
+                        - cover.template.publish:
+                            id: glasscalibur_cover
+                            current_operation: CLOSING
+                  - stepper.set_speed:
+                      id: driver
+                      speed: !lambda "return ${effective_speed};"
+                  - stepper.set_target:
+                      id: driver
+                      target: !lambda |-
+                        const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                        : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                        return (int32_t) (pos * stroke);
+
+# -----------------------------------------------------------------------------
+# Tunable number entities
+# -----------------------------------------------------------------------------
+# Each entity below is bound to a global (or directly to a chip register) and
+# pushes its value into the driver / system when the user changes it from the
+# web UI or Home Assistant. The `lambda` reads the value back live (every
+# update_interval) so the UI reflects the actual state, not just the last
+# value we wrote.
+number:
+  # Speed, Acceleration, TCOOLTHRS and SGTHRS come from core; Latitude/Longitude
+  # and the sun offsets from the scheduling mixin. This product retargets those
+  # core numbers into the reorganized groups, tightens the current cap, and adds
+  # its own tamper/vibration tuning numbers.
+
+  # Acceleration lives in Motion Tuning. The raw Speed slider is driven by the
+  # friendly Slow/Medium/Fast preset select (below) and moves to the advanced
+  # group for power users; core's own group_motion is left empty and doesn't render.
+  - id: !extend num_speed
+    web_server: { sorting_weight: 8, sorting_group_id: group_sg_adv }
+    # Appended after core's own set_action (which stores the value and pushes it
+    # to the driver): until a calibration has succeeded the driver stays at Fast.
+    set_action:
+      - stepper.set_speed: { id: driver, speed: !lambda "return ${effective_speed};" }
+  - id: !extend num_accel
+    web_server: { sorting_weight: 2, sorting_group_id: group_tuning }
+
+  # Friendly motor current in milliamps (Motion Tuning). The driver knows this
+  # board's Rsense (220 mOhm) and Vsense, so read_run_current_mA / write_run_current_mA
+  # do the register conversion — no formula here. IRUN 19 (this motor's thermal
+  # ceiling, rated 0.6 A) is ~600 mA on this board, so max_value caps there: the
+  # motor's 60 °C case limit leaves no headroom above it. Values snap to the
+  # nearest of the 32 register steps (~30 mA). Keeps global_irun (persisted,
+  # reapplied on boot) in sync with the register the driver just derived.
+  - platform: template
+    name: "Motor Current"
+    id: num_motor_current
+    unit_of_measurement: "mA"
+    icon: "mdi:current-dc"
+    web_server: { sorting_weight: 3, sorting_group_id: group_tuning }
+    min_value: 100
+    max_value: 600
+    step: 10
+    mode: BOX
+    entity_category: CONFIG
+    lambda: "return id(driver)->read_run_current_mA();"
+    update_interval: 5s
+    set_action:
+      - lambda: "id(driver)->write_run_current_mA((uint16_t) x);"
+      - globals.set:
+          id: global_irun
+          value: !lambda "return id(driver)->read_field(IRUN_FIELD);"
+
+  # Raw IRUN register (1-19) is meaningless to most users — the friendly Motor
+  # Current above drives it in mA. Keep the raw register in the advanced group for
+  # power users, still capped at 19.
+  - id: !extend num_irun
+    name: "IRUN value"
+    max_value: 19
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_sg_adv
+
+# -----------------------------------------------------------------------------
+# Removed core entity
+# -----------------------------------------------------------------------------
+# Glasscalibur's motor direction is fixed counter-clockwise (set via the board's
+# motor_direction_default substitution) and there is no runtime direction
+# control, so drop core's "Motor Direction" select.
+select:
+  # Friendly speed presets. Values were chosen from an accelerometer resonance
+  # sweep of this mechanism: there is a violent drivetrain resonance at ~2900-3300
+  # (worst 3000-3100) that all three presets stay clear of. Slow 1200 is silent;
+  # Medium 2600 sits just below the band; Fast 5500 is well above it (ramps only
+  # cross the band transiently, which is harmless). Like Motor Direction on other
+  # boards this holds no state of its own — it reads/writes global_speed (the
+  # single source of truth, restored on boot). The raw Speed slider lives in the
+  # advanced group. SG_RESULT is speed-dependent, so after a calibration moves
+  # keep running at the calibrated speed (cal_speed) when the setting is changed,
+  # until a calibration at the new setting succeeds (Speed Lock / Calibration
+  # Status say so).
+  - platform: template
+    name: "Speed"
+    id: sel_speed
+    icon: "mdi:speedometer"
+    entity_category: CONFIG
+    web_server: { sorting_weight: 1, sorting_group_id: group_tuning }
+    update_interval: 1s
+    options: ["Slow", "Medium", "Fast"]
+    lambda: |-
+      const int sp = id(global_speed);
+      if (sp <= 1900) return std::string("Slow");     // 1200
+      if (sp <= 4050) return std::string("Medium");   // 2600
+      return std::string("Fast");                     // 5500
+    set_action:
+      - lambda: |-
+          int s = ${speed_fast};                      // Fast
+          if (x.find("Slow") != std::string::npos) s = 1200;
+          else if (x.find("Medium") != std::string::npos) s = 2600;
+          id(global_speed) = s;
+      # The setting is stored either way; the driver stays at Fast until a
+      # calibration has succeeded (see sg_calibrated).
+      - stepper.set_speed: { id: driver, speed: !lambda "return ${effective_speed};" }
+      - lambda: |-
+          // Persist immediately so the choice survives an unplug seconds later.
+          global_speed->update();
+          global_preferences->sync();
+
+  - id: !remove sel_direction
+
+# -----------------------------------------------------------------------------
+# State exposure (HA)
+# -----------------------------------------------------------------------------
+# Mirrors global_state to Home Assistant as a string. Polled rather than
+# event-driven because transitions happen in many places; one poll is simpler
+# than wiring publish() into every site.
+# -----------------------------------------------------------------------------
+# State exposure (HA / web UI)
+# -----------------------------------------------------------------------------
+# Mirrors global_state to a string. Polled at 500 ms rather than event-driven
+# because state transitions happen in many places; one poll is simpler than
+# wiring publish() into every transition site.
+text_sensor:
+  - platform: template
+    name: "State"
+    id: cover_state
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_control
+    update_interval: 500ms
+    lambda: |-
+      switch (id(global_state)) {
+        case 1: return {"OPENING"};
+        case 2: return {"CLOSING"};
+        case 3: return {"TAMPERED"};
+        default: return {"IDLE"};
+      }
+
+# -----------------------------------------------------------------------------
+# Tamper alarm
+# -----------------------------------------------------------------------------
+# Pulses the buzzer for 60 seconds when tamper is first detected. 500 ms on /
+# 500 ms off at 2700 Hz — more attention-grabbing than a steady tone. Stopped
+# early by a Button 1 single-press, "Clear Tamper Alert", or "Set Tamper
+# Baseline". mode: restart means a fresh tamper trip during an active alarm
+# restarts the 60 s timer.
+script:
+  # Scheduling-mixin contract: the shared scheduling.yaml calls these on the
+  # fixed Open/Close times and on sun transitions. It has already checked
+  # "Schedule Enabled" (and sun mode); this product adds only its own guard —
+  # never drive the cover into a calibration probe in progress (a scheduled move
+  # mid-cal would re-target the stepper and corrupt it; it reconciles on the next
+  # tick after calibration ends).
+  - id: schedule_open
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(cal_active);'
+          then:
+            - logger.log: "Schedule: opening cover"
+            - cover.open: glasscalibur_cover
+  - id: schedule_close
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(cal_active);'
+          then:
+            - logger.log: "Schedule: closing cover"
+            - cover.close: glasscalibur_cover
+
+  # Firmware stop: halt at once, report IDLE, save the position. Used by the
+  # limit switches, calibration and stall handling — every stop that is not the
+  # user's STOP, so none of them ends a calibration (see the cover's stop_action).
+  - id: motion_halt
+    then:
+      - stepper.stop: driver
+      - lambda: |-
+          id(open_to_end) = false;          // stopped short of any end target
+          id(close_to_end) = false;
+      - globals.set:
+          id: global_state
+          value: "0"
+      - globals.set:
+          id: stall_release_active
+          value: 'false'
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: IDLE
+      - globals.set:
+          id: global_current_position
+          value: !lambda "return id(driver)->current_position;"
+
+  # The motion half of the cover's open / close actions. Those call these after
+  # their calibration check; calibration calls them directly.
+  # Open: to the learned stroke + open_margin_mm (open_default_mm before
+  # anything is learned) — the open switch stops it first. An open that starts
+  # from a fresh S5 home is a learning open (see limit_switch_1).
+  - id: drive_open
+    then:
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
+          id(learn_this_open) = id(homed_fresh);
+          id(homed_fresh) = false;
+          id(open_to_end) = true;
+          id(close_to_end) = false;
+          const float spm = ${steps_per_mm};
+          const int32_t learned = id(open_stroke_steps);
+          if (learned > 0) {
+            ESP_LOGI("limit", "Open stroke %.2f mm (learned); open target %.2f mm%s",
+                     learned / spm, learned / spm + ${open_margin_mm},
+                     id(learn_this_open) ? "; from a fresh home - will re-learn" : "");
+          } else {
+            ESP_LOGI("limit", "Open stroke not learned yet; open target %.2f mm%s",
+                     ${open_default_mm}, id(learn_this_open) ? "; from a fresh home - will learn" : "");
+          }
+      - globals.set:
+          id: global_state
+          value: "1"
+      # Fast until calibration has succeeded (calibration's own travels use the
+      # user's speed — it tunes StallGuard there).
+      - stepper.set_speed:
+          id: driver
+          speed: !lambda "return ${effective_speed};"
+      - stepper.set_target:
+          id: driver
+          target: !lambda |-
+            return id(open_stroke_steps) > 0
+                ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
+                : (int32_t) (${open_default_mm} * ${steps_per_mm});
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: OPENING
+  # Close: at most close_overtravel_mm past the S5 zero — the close switch stops
+  # it first; arriving there with it released is a fault (interval poll).
+  - id: drive_close
+    then:
+      - lambda: |-
+          id(motion_start_ms) = millis();
+          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+          id(sg_fired_this_move) = false;
+          id(stall_release_active) = false; // a new move gets its own stall release
+          id(homed_fresh) = false;
+          id(learn_this_open) = false;
+          id(open_to_end) = false;
+          id(close_to_end) = true;
+      - globals.set:
+          id: global_state
+          value: "2"
+      - stepper.set_speed:
+          id: driver
+          speed: !lambda "return ${effective_speed};"
+      - stepper.set_target:
+          id: driver
+          target: !lambda "return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});"
+      - cover.template.publish:
+          id: glasscalibur_cover
+          current_operation: CLOSING
+
+# -----------------------------------------------------------------------------
+# Motion-completion poll
+# -----------------------------------------------------------------------------
+# The stepper has no "target reached" event, so we poll: if we're in
+# OPENING/CLOSING and current_position has caught up to target_position, flip
+# back to IDLE, tell the cover entity, and persist the final position. The
+# limit-switch and on_stall paths already save inside their own handlers — this
+# block only covers natural mid-travel arrivals (e.g. HA position-slider drags).
+# -----------------------------------------------------------------------------
+# Periodic intervals — motion completion, tamper check, vibration stall
+# -----------------------------------------------------------------------------
+# Three interval blocks run independently:
+#   1. 200 ms — refreshes the saved position while moving, detects natural
+#               OPENING/CLOSING -> IDLE transitions (target reached) and
+#               persists the final position.
+#   2. 1 s   — anti-tamper check; only runs while IDLE and tamper detection
+#               is enabled. Latches tamper_detected, flips state to TAMPERED,
+#               and fires the buzzer alarm script.
+#   3. 200 ms — vibration-based stall check; only runs while OPENING/CLOSING.
+#               Counts consecutive "loud" samples and runs the same stop+IDLE
+#               path as on_stall if the threshold is crossed.
+interval:
+  - interval: 200ms
+    then:
+      # Keep the saved position current while moving, so a reboot or power cut
+      # mid-travel restores (close to) where the motor stopped.
+      - lambda: |-
+          int s = id(global_state);
+          if (s == 1 || s == 2) id(global_current_position) = id(driver)->current_position;
+      - if:
+          condition:
+            lambda: |-
+              int s = id(global_state);
+              return (s == 1 || s == 2) &&
+                     id(driver)->current_position == id(driver)->target_position;
+          then:
+            # An end-of-travel move that reached its target without its switch:
+            # the motor has already stopped there. Raise the fault; no re-zero.
+            # Closing / opening stay allowed. Calibration is left alone: its leg
+            # treats "count arrived, no switch" as step loss and escalates.
+            - lambda: |-
+                if (id(cal_active)) return;
+                const float spm = ${steps_per_mm};
+                const int32_t pos = id(driver)->current_position;
+                if (id(global_state) == 1 && id(open_to_end) && !id(limit_switch_1).state) {
+                  id(limit_faults) |= 2;
+                  ESP_LOGW("limit", "FAULT: open limit switch not detected - stopped at the open target "
+                           "(%d steps, %.2f mm); position not re-zeroed", (int) pos, pos / spm);
+                }
+                if (id(global_state) == 2 && id(close_to_end) && !id(limit_switch_2).state) {
+                  id(limit_faults) |= 4;
+                  ESP_LOGW("limit", "FAULT: close limit switch not detected - stopped %.1f mm past zero "
+                           "(%d steps)", ${close_overtravel_mm}, (int) pos);
+                }
+            - lambda: |-
+                id(open_to_end) = false;
+                id(close_to_end) = false;
+                id(learn_this_open) = false;    // an open that ended without S4 teaches nothing
+            - component.update: limit_fault_text
+            - globals.set:
+                id: global_state
+                value: "0"
+            - globals.set:
+                id: stall_release_active
+                value: 'false'
+            - cover.template.publish:
+                id: glasscalibur_cover
+                current_operation: IDLE
+            - globals.set:
+                id: global_current_position
+                value: !lambda "return id(driver)->current_position;"
