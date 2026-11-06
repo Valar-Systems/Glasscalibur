@@ -56,7 +56,7 @@ binary_sensor:
     entity_category: DIAGNOSTIC
     web_server:
       sorting_weight: 5
-      sorting_group_id: group_security
+      sorting_group_id: group_tamper
     lambda: 'return id(tamper_detected);'
 
 number:
@@ -71,7 +71,7 @@ number:
     id: tamper_threshold
     web_server:
       sorting_weight: 2
-      sorting_group_id: group_security
+      sorting_group_id: group_tamper
     step: 0.05
     min_value: 0.05
     max_value: 2.0
@@ -98,7 +98,7 @@ switch:
     entity_category: CONFIG
     web_server:
       sorting_weight: 1
-      sorting_group_id: group_security
+      sorting_group_id: group_tamper
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     turn_on_action:
@@ -149,7 +149,7 @@ button:
     entity_category: CONFIG
     web_server:
       sorting_weight: 3
-      sorting_group_id: group_security
+      sorting_group_id: group_tamper
     on_press:
       # Stored in g — see the note on the Tamper Detection switch.
       - globals.set:
@@ -182,7 +182,7 @@ button:
     entity_category: CONFIG
     web_server:
       sorting_weight: 4
-      sorting_group_id: group_security
+      sorting_group_id: group_tamper
     on_press:
       - script.stop: tamper_alarm
       - output.turn_off: buzzer

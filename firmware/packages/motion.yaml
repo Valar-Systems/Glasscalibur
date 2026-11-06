@@ -196,11 +196,11 @@ cover:
       float p = float(id(driver)->current_position) / float(stroke);
       return p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
 
-    # stop_action is the USER's STOP: web UI, Home Assistant, the API, Button 1,
-    # the 80 °C cutoff and the stop-on-update listener. It halts at once and, if
-    # a calibration is running, ends it. The firmware's own stops (limit
-    # switches, calibration legs, stall handling) call motion_halt directly, so
-    # they never end a calibration by accident.
+    # stop_action is the USER's STOP: web UI, Home Assistant, the API, Button 1
+    # and the stop-on-update listener. It is never thermally gated. It halts at
+    # once and, if a calibration is running, ends it. The firmware's own stops
+    # (limit switches, calibration legs, stall handling, the thermal lockout)
+    # call motion_halt directly, so they never end a calibration by accident.
     stop_action:
       - logger.log: "COVER stop_action"
       - script.execute: motion_halt
@@ -210,89 +210,118 @@ cover:
           then:
             - script.execute: cal_abort
 
-    # A user Open / Close / Set-position during calibration ends the calibration
-    # first (cal_abort, as STOP does), then carries out the move with the normal
-    # detector posture. Calibration drives through drive_open / drive_close
-    # directly, so its own travels never abort it.
+    # Each motion action checks the thermal start gate first: refused, it only
+    # logs why (a move already under way is not stopped; STOP does that).
+    # Otherwise a user Open / Close / Set-position during calibration ends the
+    # calibration first (cal_abort, as STOP does), then carries out the move with
+    # the normal detector posture. Calibration drives through drive_open /
+    # drive_close directly, so its own travels never abort it.
     open_action:
+      # Thermal start gate first (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return id(cal_active);'
+            lambda: 'return ${thermal_blocked};'
           then:
-            - script.execute: cal_abort
-      - logger.log: "COVER open_action"
-      - script.execute: drive_open
-
-    close_action:
-      - if:
-          condition:
-            lambda: 'return id(cal_active);'
-          then:
-            - script.execute: cal_abort
-      - logger.log: "COVER close_action"
-      - script.execute: drive_close
-
-    position_action:
-      - if:
-          condition:
-            lambda: 'return id(cal_active);'
-          then:
-            - script.execute: cal_abort
-      - logger.log: "COVER position_action"
-      # 100 % and 0 % are the full open and close: their end targets, the limit
-      # switches and the learned stroke all apply. Anything between is a plain
-      # proportional move on the learned stroke.
-      - if:
-          condition:
-            lambda: 'return pos >= 1.0f;'
-          then:
-            - script.execute: drive_open
+            - script.execute:
+                id: thermal_refused
+                what: "Open"
           else:
             - if:
                 condition:
-                  lambda: 'return pos <= 0.0f;'
+                  lambda: 'return id(cal_active);'
                 then:
-                  - script.execute: drive_close
+                  - script.execute: cal_abort
+            - logger.log: "COVER open_action"
+            - script.execute: drive_open
+
+    close_action:
+      # Thermal start gate first (see packages/temperature.yaml).
+      - if:
+          condition:
+            lambda: 'return ${thermal_blocked};'
+          then:
+            - script.execute:
+                id: thermal_refused
+                what: "Close"
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(cal_active);'
+                then:
+                  - script.execute: cal_abort
+            - logger.log: "COVER close_action"
+            - script.execute: drive_close
+
+    position_action:
+      # Thermal start gate first (see packages/temperature.yaml).
+      - if:
+          condition:
+            lambda: 'return ${thermal_blocked};'
+          then:
+            - script.execute:
+                id: thermal_refused
+                what: "Set position"
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(cal_active);'
+                then:
+                  - script.execute: cal_abort
+            - logger.log: "COVER position_action"
+            # 100 % and 0 % are the full open and close: their end targets, the limit
+            # switches and the learned stroke all apply. Anything between is a plain
+            # proportional move on the learned stroke.
+            - if:
+                condition:
+                  lambda: 'return pos >= 1.0f;'
+                then:
+                  - script.execute: drive_open
                 else:
-                  - lambda: |-
-                      id(motion_start_ms) = millis();
-                      id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-                      id(sg_fired_this_move) = false;
-                      id(stall_release_active) = false; // a new move gets its own stall release
-                      id(homed_fresh) = false;          // any motion ends a fresh home
-                      id(learn_this_open) = false;
-                      id(open_to_end) = false;
-                      id(close_to_end) = false;
-                  # Direction is inferred by comparing the new target to current_position.
                   - if:
                       condition:
-                        lambda: |-
-                          const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
-                                                                          : (int32_t) (${open_default_mm} * ${steps_per_mm});
-                          return (int32_t) (pos * stroke) >= id(driver)->current_position;
+                        lambda: 'return pos <= 0.0f;'
                       then:
-                        - globals.set:
-                            id: global_state
-                            value: "1"
-                        - cover.template.publish:
-                            id: glasscalibur_cover
-                            current_operation: OPENING
+                        - script.execute: drive_close
                       else:
-                        - globals.set:
-                            id: global_state
-                            value: "2"
-                        - cover.template.publish:
-                            id: glasscalibur_cover
-                            current_operation: CLOSING
-                  - stepper.set_speed:
-                      id: driver
-                      speed: !lambda "return ${effective_speed};"
-                  - stepper.set_target:
-                      id: driver
-                      target: !lambda |-
-                        const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
-                                                                        : (int32_t) (${open_default_mm} * ${steps_per_mm});
-                        return (int32_t) (pos * stroke);
+                        - lambda: |-
+                            id(motion_start_ms) = millis();
+                            id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+                            id(sg_fired_this_move) = false;
+                            id(stall_release_active) = false; // a new move gets its own stall release
+                            id(homed_fresh) = false;          // any motion ends a fresh home
+                            id(learn_this_open) = false;
+                            id(open_to_end) = false;
+                            id(close_to_end) = false;
+                        # Direction is inferred by comparing the new target to current_position.
+                        - if:
+                            condition:
+                              lambda: |-
+                                const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                                : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                                return (int32_t) (pos * stroke) >= id(driver)->current_position;
+                            then:
+                              - globals.set:
+                                  id: global_state
+                                  value: "1"
+                              - cover.template.publish:
+                                  id: glasscalibur_cover
+                                  current_operation: OPENING
+                            else:
+                              - globals.set:
+                                  id: global_state
+                                  value: "2"
+                              - cover.template.publish:
+                                  id: glasscalibur_cover
+                                  current_operation: CLOSING
+                        - stepper.set_speed:
+                            id: driver
+                            speed: !lambda "return ${effective_speed};"
+                        - stepper.set_target:
+                            id: driver
+                            target: !lambda |-
+                              const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                              : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                              return (int32_t) (pos * stroke);
 
 # -----------------------------------------------------------------------------
 # Tunable number entities

@@ -75,6 +75,18 @@ substitutions:
   cal_vib_backstop:    "0.45"      # vibration threshold floor held during calibration probes
   stall_release_steps: "24500"     # stall auto-release back-off (~8 mm sash travel)
 
+  # --- Motor temperature (°C, Motor Temperature sensor) ----------------------
+  # Substitutions because a measured sensor offset may move them. The motor's
+  # case limit is 60 °C. See packages/temperature.yaml.
+  thermal_warn_c:      "50"        # warn (log + Thermal Alert "warning"); calibration won't start above it
+  thermal_start_max_c: "55"        # no new motion at or above; calibration stops above it
+  thermal_lockout_c:   "60"        # stop and latch the thermal lockout
+  thermal_clear_c:     "48"        # the lockout clears (and the warning re-arms) below this
+  thermal_stale_s:     "15"        # no valid reading for this long = the same lockout
+  # True when no new motion may start: the lockout is set, or there is no valid
+  # reading (none yet after boot, or a failed read), or the motor is too warm.
+  thermal_blocked: "(id(thermal_lockout) || isnan(id(motor_temp).state) || id(motor_temp).state >= ${thermal_start_max_c})"
+
 esphome:
   project:
     name: "valar-systems.glasscalibur"
@@ -95,7 +107,7 @@ packages:
   # Merged in this order after core and scheduling. The order keeps the four
   # intervals registering as they always have: motion's 200 ms completion poll,
   # tamper's 1 s check, stall's 200 ms vibration check, calibration's 100 ms
-  # sampler.
+  # sampler; temperature's 500 ms reading check comes last.
   system: !include packages/system.yaml
   web_ui: !include packages/web-ui.yaml
   motion: !include packages/motion.yaml

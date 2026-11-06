@@ -191,11 +191,11 @@ binary_sensor:
 # -----------------------------------------------------------------------------
 # Child lock
 # -----------------------------------------------------------------------------
-# When ON, the physical Button 1 (single + double click) is ignored so the
-# cover can't be opened, closed, or stopped from the on-device button — e.g. to
-# keep a child from operating it. Remote control is intentionally unaffected:
-# the web UI, Home Assistant, and the open/close schedule all keep working, so
-# you can still operate the cover and toggle this lock from your phone. The
+# When ON, the physical Button 1 ignores presses (single and double click), so
+# the cover can't be opened, closed, or stopped from the on-device button. Remote
+# control keeps working: the web UI, Home Assistant, the API and the open/close
+# schedule still operate the cover, and the lock itself is switched from the web
+# UI or Home Assistant. The
 # WiFi-reset button (GPIO21) is also left active so the device can always be
 # recovered. Persists across reboots; default OFF so a fresh unit is never
 # locked.

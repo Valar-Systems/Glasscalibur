@@ -81,8 +81,8 @@ its move).
 finds the lowest motor current that moves this window reliably and tunes both stall
 detectors for it.
 
-1. It refuses if the unit is moving, tampered or already calibrating, or if the motor
-   is above 50 °C (or its temperature sensor is missing).
+1. It refuses if the unit is moving, tampered or already calibrating, during a thermal
+   lockout, or if the motor is above 50 °C (or its temperature sensor is missing).
 2. Three short beeps, then 2 s before anything moves.
 3. Homes to the close switch at full current (skipped if the close switch is already
    pressed).
@@ -155,10 +155,28 @@ Other things you may see:
 
 | Sign | Means | What to do |
 | --- | --- | --- |
-| Motion stops, log `TOO HOT!` | The motor read above 80 °C. | Let it cool; check the window moves freely. |
+| **Thermal Alert** `warning` | The motor read 50 °C or more. | Moves still run. Check the window moves freely. |
+| A command does nothing, log `… refused - …` | The start gate (see [Motor temperature](#motor-temperature)). | Let the motor cool. STOP always works. |
+| **Thermal Lockout** on, four chirps, **Thermal Alert** `lockout` | The motor read 60 °C or more; motion stopped. | Let it cool: it clears below 48 °C (**Thermal Alert** `cleared`). Check the window moves freely. |
+| **Thermal Lockout** on, **Thermal Alert** `sensor_lost` | No valid temperature reading for 15 s. | Check the temperature board and its cable. It clears on a reading below 48 °C. |
 | **Obstruction** event, the window backs off ~8 mm | A stall detector stopped a move. | Clear the path. Repeated stops on a clear path: run **Auto‑Calibrate**. |
 | **Calibration Status** `FAILED - …` | See above. | Check the track, let the motor cool, run again. The last good calibration stays in use. |
 | **Tamper Detected**, buzzer | The armed unit was moved. | Button 1 click or **Clear Tamper Alert**; **Set Tamper Baseline** after re‑mounting. |
+
+## Motor temperature
+
+**Motor Temperature** (TMP1075, every 3 s) drives these set points. They're the
+`thermal_*` substitutions in [`glasscalibur.yaml`](glasscalibur.yaml).
+
+| Reading | What happens |
+| --- | --- |
+| 50 °C or more | A warning in the log and **Thermal Alert** `warning`, once until a reading below 48 °C. |
+| 55 °C or more | **Start gate:** no new motion starts. Open, Close and Set‑position (web UI, Home Assistant, the API, Button 1, schedules) and Auto‑Calibrate are refused and logged. A move already under way continues. |
+| 60 °C or more | **Thermal lockout:** motion stops (a stall back‑off already under way finishes), a running calibration ends, four chirps, **Thermal Alert** `lockout`, **Thermal Lockout** on. Nothing new starts until a reading below 48 °C clears it (**Thermal Alert** `cleared`). |
+| No valid reading for 15 s | The same lockout, with **Thermal Alert** `sensor_lost`. Counted from boot; until the first reading after boot, the start gate refuses. |
+
+**STOP** always works. A restart clears the lockout; the start gate still applies. A
+scheduled open or close that the gate refuses is not retried.
 
 ## Stall detection and tamper
 
@@ -167,11 +185,14 @@ Other things you may see:
   turns it on. A stall outside calibration stops the motor and backs off about 8 mm
   (24,500 steps); a second stall during that back‑off just stops. **StallGuard
   Auto‑Tune** (off by default) nudges SGTHRS from the vibration evidence.
+- **At least one detector stays on.** Switching **StallGuard Enabled** off while
+  **Vibration Stall Detection** is off is refused (it switches back on, with a
+  warning in the log), and so is switching vibration off while StallGuard is off. A
+  unit that stored both off turns StallGuard on at startup.
 - **Tamper Detection** (off by default): **Set Tamper Baseline** records the resting
   orientation; a deviation above **Tamper Threshold** (g) while idle raises **Tamper
   Detected** and sounds the buzzer for 60 s. To open the window by hand, lift the
   unit off its mounts; with Tamper Detection on, that sounds the alarm.
-- **Motor Temperature** (TMP1075, every 3 s) stops motion above 80 °C.
 
 ## Entity reference
 
@@ -188,6 +209,7 @@ categories.
 | Button 1 | binary sensor | the unit's button |
 | Child Lock | switch (config) | the unit's button ignores presses; remote control keeps working |
 | Obstruction | event | `obstructed`, once per stall that stops a move outside calibration |
+| Thermal Alert | event | `warning`, `lockout`, `sensor_lost`, `cleared` (see [Motor temperature](#motor-temperature)) |
 
 **Motion Tuning**
 
@@ -209,7 +231,7 @@ categories.
 
 | Entity | Type | Notes |
 | --- | --- | --- |
-| Vibration Stall Detection | switch (config) | the accelerometer stall check |
+| Vibration Stall Detection | switch (config) | the accelerometer stall check; can't be off while StallGuard is off |
 | Vibration Threshold | number (config) | g |
 | Vibration Stall Samples | number (config) | how many loud samples (a leaky count, 2–60, default 5) stop the motor |
 
@@ -249,6 +271,7 @@ categories.
 | Board | text (diagnostic) | board name |
 | Update Firmware (GitHub) | button (diagnostic) | installs the latest release |
 | Motor Temperature | sensor (diagnostic) | °C |
+| Thermal Lockout | binary sensor (diagnostic) | on while the thermal lockout holds |
 | Restart | button (diagnostic) | restarts the unit |
 | Open stroke | sensor (diagnostic) | mm; unknown until learned |
 | StallGuard calibrated | binary sensor (diagnostic) | a calibration has succeeded |
@@ -272,7 +295,7 @@ categories.
 
 | Entity | Type | Notes |
 | --- | --- | --- |
-| StallGuard Enabled | switch (config) | the StallGuard reaction (default on) |
+| StallGuard Enabled | switch (config) | the StallGuard reaction (default on); can't be off while vibration is off |
 | SGTHRS (stall threshold) | number (config) | set by calibration |
 | TCOOLTHRS | number (config) | set by calibration |
 | SG_RESULT | sensor (diagnostic) | live StallGuard reading |

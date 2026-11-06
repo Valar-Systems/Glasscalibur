@@ -47,10 +47,13 @@ All of these come from the firmware in [`firmware/`](firmware):
   stops there and reports it on the **Fault** sensor.
 - **Stall detection** — the TMC2209's StallGuard and an accelerometer vibration
   check stop the motor when the window jams, then back it off about 8 mm. Each stop
-  fires an **Obstruction** event Home Assistant can trigger on.
+  fires an **Obstruction** event Home Assistant can trigger on. At least one of the
+  two is always on: the firmware won't let both be switched off.
 - **Auto‑calibration** — finds the lowest reliable motor current and tunes both stall
   detectors for this window. Until it has run, every move goes at the Fast speed.
-- **Motor temperature cutoff** — motion stops if the motor reads above 80 °C.
+- **Motor temperature protection** — a warning at 50 °C; no new moves from 55 °C;
+  at 60 °C, or after 15 s without a reading, a lockout stops motion until the
+  motor is below 48 °C. Each step fires a **Thermal Alert** event.
 - **Tamper alarm** — once armed, the accelerometer notices if the mounted unit is
   moved and sounds the buzzer.
 - **Child Lock** — makes the unit's own button ignore presses; the web UI, Home
@@ -89,7 +92,7 @@ To open the window by hand, lift the unit off its mounts (no tools needed). With
 
 | How | What you get |
 | --- | --- |
-| **Web browser** | `http://glasscalibur-XXXXXX.local` (the last six characters of the unit's MAC address). The page groups everything: Control, Motion Tuning, Calibration, Stall Detection, Schedule, tamper, Diagnostics and advanced StallGuard. |
+| **Web browser** | `http://glasscalibur-XXXXXX.local` (the last six characters of the unit's MAC address). The page groups everything: Control, Motion Tuning, Calibration, Stall Detection, Schedule, Tamper, Diagnostics and advanced StallGuard. |
 | **Home Assistant** | Added by the ESPHome integration as one device: the **Glasscalibur** cover plus its settings and sensors. |
 | **HTTP** | The web server's REST API, addressed by entity name, e.g. `POST /cover/Glasscalibur/open`, `/close`, `/stop`, or `/cover/Glasscalibur/set?position=0.5` (`0.0` closed … `1.0` open). Names are case‑sensitive; write a space as `%20`. |
 
