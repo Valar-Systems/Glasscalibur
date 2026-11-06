@@ -20,7 +20,7 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   both the new carriage (switch near 99.3 mm) and the old one (~95.5 mm).
   The learned value is saved, and flash is written only when it moves by more
   than 0.05 mm.
-- **Uncalibrated fail-safe.** Until a calibration has completed successfully
+- **Uncalibrated speed lock.** Until a calibration has completed successfully
   on the unit, every move (open, close, Button 1, schedules, Home Assistant)
   runs at the Fast preset whatever the speed setting, because that is where
   the driver's default StallGuard threshold detects stalls. The web UI shows
@@ -59,6 +59,10 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   auto-calibration enables it). The trip counters stay.
 
 ### Changed
+- Repository: the old Model-H design is removed (kept at the `legacy-old-design`
+  tag); the firmware is split into local packages under `firmware/packages/`
+  with `firmware/glasscalibur.yaml` as the one entry file (no behaviour change);
+  `README.md` and `firmware/README.md` are rewritten for the current design.
 - The open no longer drives toward the old fixed 111 mm end of travel; a close
   runs at most 0.6 mm past zero before stopping on the close switch.
 - **StallGuard Enabled** now defaults on for units that have never stored a
@@ -152,8 +156,8 @@ auto-calibration sequence) live in the product layer.
 ### Added
 - **Child Lock** switch (Control group). When ON, the physical Button 1
   (single- and double-click) is ignored so the cover can't be opened, closed,
-  or stopped from the on-device button — useful for keeping a child from
-  operating it. Remote control is intentionally unaffected: the web UI, Home
+  or stopped from the on-device button. Remote control is intentionally
+  unaffected: the web UI, Home
   Assistant, and the open/close schedule all keep working, so you can still
   operate the cover and toggle the lock from your phone. The Wi-Fi-reset button
   (GPIO21) is also left active so the device can always be recovered. State
