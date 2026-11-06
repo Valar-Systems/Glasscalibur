@@ -688,9 +688,10 @@ script:
   # runs once at start; a full search is up to ~11 travels and field testing
   # showed 49 °C at start → 55.9 °C three probes in. Called before every
   # calibration travel, and by the thermal lockout: above thermal_start_max_c
-  # (55 °C), NAN (no sensor means no protection) or during the lockout it stops
-  # the whole sequence with the same ship-safe cleanup as every other exit path.
-  # 55 = 5 °C of margin under the motor's 60 °C datasheet case limit.
+  # (55 °C), NAN (no sensor means no protection) or during the lockout,
+  # it stops the whole sequence with the same ship-safe cleanup as every
+  # other exit path. 55 = 5 °C of margin under the motor's 60 °C datasheet
+  # case limit.
   - id: cal_thermal_guard
     mode: single
     then:
