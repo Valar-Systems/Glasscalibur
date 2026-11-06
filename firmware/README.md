@@ -15,6 +15,9 @@ Every setting is documented inline in those files.
 
 ## Flashing and updates
 
+USB powers the board for flashing but can't run the motor; the motor needs the
+supplied 24 V DC adapter.
+
 **First flash (blank board) — over USB:**
 
 - ESPHome CLI: `esphome run firmware/glasscalibur.yaml` and pick the serial port, or
@@ -166,7 +169,8 @@ Other things you may see:
   Auto‑Tune** (off by default) nudges SGTHRS from the vibration evidence.
 - **Tamper Detection** (off by default): **Set Tamper Baseline** records the resting
   orientation; a deviation above **Tamper Threshold** (g) while idle raises **Tamper
-  Detected** and sounds the buzzer for 60 s.
+  Detected** and sounds the buzzer for 60 s. To open the window by hand, lift the
+  unit off its mounts; with Tamper Detection on, that sounds the alarm.
 - **Motor Temperature** (TMP1075, every 3 s) stops motion above 80 °C.
 
 ## Entity reference

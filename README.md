@@ -1,16 +1,20 @@
 # Glasscalibur — automatic window opener
 
-Glasscalibur opens and closes a window with a small stepper motor, a lead screw and
-a sliding ram. It runs [ESPHome](https://esphome.io) on an ESP32‑C6, so you can
+Glasscalibur opens and closes horizontal sliding windows with a small stepper motor,
+a lead screw and a sliding ram. It runs [ESPHome](https://esphome.io) on an ESP32‑C6, so you can
 control it from a web browser on your network with no app or cloud account, pair it
 with Home Assistant, put it on a schedule, or drive it from anything that can send
 an HTTP request.
+
+![Glasscalibur: an aluminum housing with white end caps, the ram extended from the front end](docs/images/glasscalibur.jpg)
 
 > **Older design:** the original Model‑H (its Arduino firmware, STEP files and media) is kept at the [`legacy-old-design`](https://github.com/Valar-Systems/Glasscalibur/tree/legacy-old-design) tag.
 
 ---
 
 ## How it works
+
+![Glasscalibur seen from above with its two end mounts, the ram extended](docs/images/glasscalibur-with-mounts.jpg)
 
 - **Drive.** A NEMA 8 stepper turns a Tr6×1 lead screw through a 12T:23T gear
   reduction. A printed carriage rides the lead screw. A 12 mm aluminum tube (the
@@ -25,7 +29,7 @@ an HTTP request.
   motor and reads its temperature.
 - **End of travel.** The close switch is position zero. The open switch's position
   is learned on each unit, and an open drives to just past it (0.5 mm), stopping on
-  the switch. The mechanism itself stops before 4 in.
+  the switch.
 
 ## Features
 
@@ -56,7 +60,20 @@ All of these come from the firmware in [`firmware/`](firmware):
 - **Updates over the air** — the **Update Firmware (GitHub)** button installs the
   latest release; the motor stops when an update begins.
 
+<p>
+<img src="docs/images/installed-closeup.jpg" alt="Glasscalibur mounted along the bottom of a horizontal sliding window, close up" width="49%">
+<img src="docs/images/installed-window.jpg" alt="Glasscalibur installed along the bottom of a horizontal sliding window, seen from inside the room" width="49%">
+</p>
+
 ## Install overview
+
+- **In the kit:** the unit; two mounts with VHB pads and optional screws; three
+  140.5 mm extension tubes; three 30 mm connector rods; final rods A (150 mm) and
+  B (180 mm); two M10 jam nuts; the egress nut; the 24 V adapter.
+- **Fit:** 21.1–37.6 in (535–956 mm) between the jamb and sash mount faces with the
+  window closed, using one to three extension tubes.
+- **Power:** use only the supplied 24 V DC adapter. USB powers the board for flashing
+  but can't run the motor.
 
 1. Mount the unit with its two end mounts (VHB tape; an optional screw in each).
 2. Join it to your Wi‑Fi (see [first setup](firmware/README.md#first-setup)).
@@ -64,6 +81,9 @@ All of these come from the firmware in [`firmware/`](firmware):
    to Fast.
 4. If calibration hasn't already taught the open stroke (**Open stroke** still
    unknown), close fully, then open once.
+
+To open the window by hand, lift the unit off its mounts (no tools needed). With
+**Tamper Detection** on, lifting it off sounds the tamper alarm.
 
 ## Using it
 
