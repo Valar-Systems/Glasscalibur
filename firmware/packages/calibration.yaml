@@ -299,9 +299,10 @@ script:
   # Finds the lowest reliable motor current and tunes both stall detectors to
   # this specific window, using the physical limit switches as ground truth.
   #
-  #   1. Refuse when busy, tampered, already calibrating, or the motor is hot
-  #      (>50 °C) or its temperature is NAN — sensor absent means thermal
-  #      protection absent; refuse, never ignore.
+  #   1. Refuse when busy, tampered, already calibrating, during the thermal
+  #      lockout, or when the motor is hot (> thermal_warn_c, 50 °C) or its
+  #      temperature is NAN — sensor absent means thermal protection absent;
+  #      refuse, never ignore.
   #   2. Announce: 3 beeps + 2 s stand-clear pause before ANY motion.
   #   3. Detector posture: StallGuard REACTION off (SGTHRS is the thing being
   #      tuned — a stale threshold would false-abort every probe). The
@@ -356,12 +357,21 @@ script:
             - script.stop: auto_calibrate
       - if:
           condition:
-            lambda: 'return isnan(id(motor_temp).state) || id(motor_temp).state > 50.0f;'
+            lambda: 'return id(thermal_lockout);'
           then:
             - logger.log:
                 level: WARN
-                format: "CAL: refused - motor temp %.1f degC (limit 50, NAN = sensor absent)"
-                args: ['id(motor_temp).state']
+                format: "CAL: refused - thermal lockout (clears below %.0f degC)"
+                args: ['(float) ${thermal_clear_c}']
+            - script.stop: auto_calibrate
+      - if:
+          condition:
+            lambda: 'return isnan(id(motor_temp).state) || id(motor_temp).state > ${thermal_warn_c};'
+          then:
+            - logger.log:
+                level: WARN
+                format: "CAL: refused - motor temp %.1f degC (limit %.0f, NAN = sensor absent)"
+                args: ['id(motor_temp).state', '(float) ${thermal_warn_c}']
             - script.stop: auto_calibrate
 
       - logger.log: "CAL: starting - keep the window path clear"
@@ -401,8 +411,10 @@ script:
       - delay: 2s
 
       # ---- 3. Detector posture ---------------------------------------------
-      - switch.turn_off: stallguard_enabled
+      # Vibration on BEFORE StallGuard off: the stall-detector interlock refuses
+      # to switch StallGuard off while vibration is off.
       - switch.turn_on: vib_enabled
+      - switch.turn_off: stallguard_enabled
       - number.set:
           id: vib_threshold
           value: !lambda |-
@@ -675,10 +687,10 @@ script:
   # Mid-run thermal guard for auto_calibrate. The 50 °C precondition only
   # runs once at start; a full search is up to ~11 travels and field testing
   # showed 49 °C at start → 55.9 °C three probes in. Called before every
-  # calibration travel: above 55 °C (or NAN — no sensor means no protection)
-  # it stops the whole sequence with the same ship-safe cleanup as every
-  # other exit path. 55 = FW-2's derate level: 5 °C of margin under the
-  # motor's 60 °C datasheet case limit.
+  # calibration travel, and by the thermal lockout: above thermal_start_max_c
+  # (55 °C), NAN (no sensor means no protection) or during the lockout it stops
+  # the whole sequence with the same ship-safe cleanup as every other exit path.
+  # 55 = 5 °C of margin under the motor's 60 °C datasheet case limit.
   - id: cal_thermal_guard
     mode: single
     then:
@@ -686,12 +698,13 @@ script:
           condition:
             lambda: |-
               return id(cal_active) &&
-                     (isnan(id(motor_temp).state) || id(motor_temp).state > 55.0f);
+                     (id(thermal_lockout) || isnan(id(motor_temp).state) ||
+                      id(motor_temp).state > ${thermal_start_max_c});
           then:
             - logger.log:
                 level: WARN
-                format: "CAL: thermal stop - motor %.1f degC (limit 55). Cool down, then re-run."
-                args: ['id(motor_temp).state']
+                format: "CAL: thermal stop - motor %.1f degC (limit %.0f%s). Cool down, then re-run."
+                args: ['id(motor_temp).state', '(float) ${thermal_start_max_c}', 'id(thermal_lockout) ? ", thermal lockout" : ""']
             - script.execute: motion_halt
             - globals.set:
                 id: cal_result

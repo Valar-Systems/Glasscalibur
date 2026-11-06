@@ -1,9 +1,46 @@
 # =============================================================================
-# Glasscalibur - motor temperature and the 80 C cutoff
+# Glasscalibur - motor temperature: warning, start gate and thermal lockout
 # =============================================================================
-# A local package merged by firmware/glasscalibur.yaml. Its items moved
-# verbatim from the former single product file.
+# A local package merged by firmware/glasscalibur.yaml. The thresholds are the
+# thermal_* substitutions there (warn 50, start gate 55, lockout 60, clear 48,
+# no reading 15 s).
+#
+#   warn      a valid reading >= thermal_warn_c: log WARN + Thermal Alert
+#             "warning", once until a reading below thermal_clear_c re-arms it.
+#   start     no new motion starts while ${thermal_blocked} (the lockout, no
+#   gate      valid reading, or >= thermal_start_max_c). The cover's open / close
+#             / position actions and auto_calibrate check it first; every command
+#             path (web UI, Home Assistant, the API, Button 1, schedules) reaches
+#             the motor through those. STOP is never gated. A move already under
+#             way is not stopped by the gate.
+#   lockout   a valid reading >= thermal_lockout_c, or no valid reading for
+#             thermal_stale_s (counted from boot until the first one): latch
+#             thermal_lockout, stop motion (a stall back-off already running may
+#             finish - it is the move that releases the clamp), end a running
+#             calibration, chirp, fire Thermal Alert "lockout" / "sensor_lost".
+#   clear     a valid reading below thermal_clear_c clears the lockout and fires
+#             Thermal Alert "cleared".
+#
+# The latch is RAM only: a restart clears it, and the start gate then refuses
+# until a valid reading under thermal_start_max_c arrives.
 # =============================================================================
+
+globals:
+  # The thermal lockout latch (see above). Shown by "Thermal Lockout".
+  - id: thermal_lockout
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # The warning has fired; re-armed by a reading below thermal_clear_c.
+  - id: thermal_warned
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # millis() of the last valid (non-NAN) reading; 0 = none since boot.
+  - id: thermal_last_ok_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
 
 sensor:
 
@@ -13,7 +50,7 @@ sensor:
 
   - platform: tmp1075
     name: "Motor Temperature"
-    id: motor_temp     # referenced by the auto_calibrate temperature gate
+    id: motor_temp     # referenced by the start gate and the auto_calibrate temperature gate
     update_interval: 3s
     entity_category: DIAGNOSTIC
     web_server:
@@ -22,12 +59,140 @@ sensor:
     i2c_id: i2c_bus
     address: 0x49
     accuracy_decimals: 2
-    # --- ACTION ON TEMPERATURE EXAMPLE ---
-    on_value_range:
-      - above: 80
-        then:
-          # During calibration, end it as a thermal abort (result 4) before the
-          # STOP; outside calibration cal_thermal_guard does nothing.
-          - script.execute: cal_thermal_guard
-          - cover.stop: glasscalibur_cover
-          - logger.log: "TOO HOT!"
+    on_value:
+      - lambda: |-
+          if (isnan(x)) return;                       // not a valid reading
+          id(thermal_last_ok_ms) = millis();
+          if (x >= ${thermal_lockout_c}) {
+            id(thermal_warned) = true;
+            if (!id(thermal_lockout)) id(thermal_trip)->execute(1);
+            return;
+          }
+          if (x < ${thermal_clear_c}) {
+            id(thermal_warned) = false;
+            if (id(thermal_lockout)) id(thermal_clear)->execute();
+            return;
+          }
+          if (x >= ${thermal_warn_c} && !id(thermal_warned) && !id(thermal_lockout)) {
+            id(thermal_warned) = true;
+            id(thermal_warn)->execute();
+          }
+
+binary_sensor:
+  - platform: template
+    name: "Thermal Lockout"
+    id: thermal_lockout_sensor
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 7.5
+      sorting_group_id: group_diagnostics
+    lambda: 'return id(thermal_lockout);'
+
+# Fires "warning", "lockout", "sensor_lost" and "cleared" (see the top of this
+# file). Home Assistant automations can trigger on it directly.
+event:
+  - platform: template
+    name: "Thermal Alert"
+    id: thermal_event
+    event_types: ["warning", "lockout", "sensor_lost", "cleared"]
+    web_server:
+      sorting_weight: 6
+      sorting_group_id: group_control
+
+script:
+  # Latch the lockout. cause 1 = reading >= thermal_lockout_c, 2 = no valid
+  # reading for thermal_stale_s.
+  - id: thermal_trip
+    parameters:
+      cause: int
+    then:
+      - lambda: |-
+          id(thermal_lockout) = true;
+          if (cause == 2)
+            ESP_LOGW("thermal", "THERMAL LOCKOUT - no valid motor temperature reading for %d s",
+                     (int) ${thermal_stale_s});
+          else
+            ESP_LOGW("thermal", "THERMAL LOCKOUT - motor %.1f degC (limit %.0f); clears below %.0f degC",
+                     id(motor_temp).state, (float) ${thermal_lockout_c}, (float) ${thermal_clear_c});
+      - event.trigger:
+          id: thermal_event
+          event_type: !lambda 'return cause == 2 ? std::string("sensor_lost") : std::string("lockout");'
+      # A running calibration ends as a thermal stop (its guard checks the latch).
+      - script.execute: cal_thermal_guard
+      # Stop any other motion, except a stall back-off already under way.
+      - if:
+          condition:
+            lambda: |-
+              const int s = id(global_state);
+              return (s == 1 || s == 2) && !id(stall_release_active);
+          then:
+            - script.execute: motion_halt
+      - script.execute: thermal_chirp
+
+  - id: thermal_clear
+    then:
+      - globals.set:
+          id: thermal_lockout
+          value: 'false'
+      - logger.log:
+          level: WARN
+          tag: thermal
+          format: "Thermal lockout cleared - motor %.1f degC"
+          args: ['id(motor_temp).state']
+      - event.trigger:
+          id: thermal_event
+          event_type: cleared
+
+  - id: thermal_warn
+    then:
+      - logger.log:
+          level: WARN
+          tag: thermal
+          format: "Motor %.1f degC - at or above the warning level (%.0f)"
+          args: ['id(motor_temp).state', '(float) ${thermal_warn_c}']
+      - event.trigger:
+          id: thermal_event
+          event_type: warning
+
+  # Logs why a cover command was refused by the start gate.
+  - id: thermal_refused
+    parameters:
+      what: string
+    then:
+      - lambda: |-
+          if (id(thermal_lockout))
+            ESP_LOGW("thermal", "%s refused - thermal lockout (clears below %.0f degC)",
+                     what.c_str(), (float) ${thermal_clear_c});
+          else if (isnan(id(motor_temp).state))
+            ESP_LOGW("thermal", "%s refused - no valid motor temperature reading", what.c_str());
+          else
+            ESP_LOGW("thermal", "%s refused - motor %.1f degC (no new moves at or above %.0f)",
+                     what.c_str(), id(motor_temp).state, (float) ${thermal_start_max_c});
+
+  # Four short high chirps, distinct from the calibration beeps and the tamper
+  # alarm.
+  - id: thermal_chirp
+    mode: single
+    then:
+      - repeat:
+          count: 4
+          then:
+            - output.ledc.set_frequency:
+                id: buzzer
+                frequency: "3200Hz"
+            - output.set_level:
+                id: buzzer
+                level: "50%"
+            - delay: 60ms
+            - output.turn_off: buzzer
+            - delay: 60ms
+
+interval:
+  # No valid reading for thermal_stale_s (counted from boot until the first
+  # one) -> the same lockout. 500 ms: a period no other interval uses.
+  - interval: 500ms
+    then:
+      - lambda: |-
+          if (!id(thermal_lockout) &&
+              millis() - id(thermal_last_ok_ms) >= (uint32_t) ${thermal_stale_s} * 1000UL)
+            id(thermal_trip)->execute(2);

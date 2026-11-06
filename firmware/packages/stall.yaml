@@ -3,9 +3,42 @@
 # =============================================================================
 # A local package merged by firmware/glasscalibur.yaml. Its items moved
 # verbatim from the former single product file.
+#
+# Stall-detector interlock: at least one of the two detectors is always on.
+# Switching StallGuard Enabled off while Vibration Stall Detection is off is
+# refused (it switches straight back on, logged at WARN), and so is switching
+# vibration off while StallGuard is off, from any interface. Both switches
+# restore from flash before the interlock arms (on_boot 490); if both were
+# stored off, StallGuard is turned on there. Calibration turns vibration on
+# before it turns StallGuard off.
 # =============================================================================
 
+esphome:
+  on_boot:
+    # After the switches' restore (template switches set up at priority 798):
+    # repair a stored "both off", then arm the interlock.
+    - priority: 490
+      then:
+        - if:
+            condition:
+              lambda: 'return !id(stallguard_enabled).state && !id(vib_enabled).state;'
+            then:
+              - logger.log:
+                  level: WARN
+                  format: "Both stall detectors were off - StallGuard turned on (one must stay on)"
+              - switch.turn_on: stallguard_enabled
+        - globals.set:
+            id: stall_interlock_armed
+            value: 'true'
+
 globals:
+
+  # Set by on_boot 490 once both detector switches have restored; until then
+  # the interlock below does not act.
+  - id: stall_interlock_armed
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
   # --- Vibration-based stall (secondary to StallGuard) ---
   # A stalled stepper shakes the device hard. While the motor is commanded to
@@ -204,6 +237,16 @@ switch:
           id: vib_loud_count
           value: "0"
       - logger.log: "Vibration stall detection disabled"
+    # Interlock: never both detectors off.
+    on_turn_off:
+      - if:
+          condition:
+            lambda: 'return id(stall_interlock_armed) && !id(stallguard_enabled).state;'
+          then:
+            - logger.log:
+                level: WARN
+                format: "Vibration Stall Detection stays on - StallGuard is off, and one stall detector must stay on"
+            - switch.turn_on: vib_enabled
 
   # Master enable for the TMC2209 StallGuard *handler*. The chip's SGTHRS is
   # always set to the user's chosen value (via the SGTHRS number entity), so
@@ -227,6 +270,16 @@ switch:
       - logger.log: "StallGuard handler enabled"
     turn_off_action:
       - logger.log: "StallGuard handler disabled"
+    # Interlock: never both detectors off.
+    on_turn_off:
+      - if:
+          condition:
+            lambda: 'return id(stall_interlock_armed) && !id(vib_enabled).state;'
+          then:
+            - logger.log:
+                level: WARN
+                format: "StallGuard stays on - Vibration Stall Detection is off, and one stall detector must stay on"
+            - switch.turn_on: stallguard_enabled
 
   # Self-healing StallGuard tune. When ON (and StallGuard + Vibration Stall
   # Detection are both on), the firmware cross-checks every StallGuard trip against
@@ -283,7 +336,7 @@ button:
 # Accelerometer x/y/z feed the anti-tamper and vibration-stall logic in the
 # intervals at the bottom of the file. TSTEP / SG_RESULT are useful for tuning
 # StallGuard sensitivity (drive the motor under load, watch SG_RESULT, set
-# SGTHRS to about half of it). Motor temperature is hard-cut at 80 °C.
+# SGTHRS to about half of it). Motor temperature: packages/temperature.yaml.
 sensor:
   # Core's SG_RESULT / TSTEP readouts are StallGuard-tuning diagnostics; move them
   # from core's Diagnostics group down into the advanced StallGuard group with the

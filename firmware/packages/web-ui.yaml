@@ -7,7 +7,7 @@
 
 # Web UI groups. Control / Schedule / Diagnostics come from core + the scheduling
 # mixin. Everything else is defined here so the page reads top-to-bottom as:
-# Control, Motion Tuning, Calibration, Stall Detection, Schedule, Security,
+# Control, Motion Tuning, Calibration, Stall Detection, Schedule, Tamper,
 # Diagnostics, StallGuard (advanced).
 #
 # A product can't re-weight a core group (redefining its id errors), so — as on
@@ -21,5 +21,5 @@ web_server:
     - { id: group_tuning,   name: "Motion Tuning",         sorting_weight: 12 }
     - { id: group_cal,      name: "Calibration",           sorting_weight: 22 }
     - { id: group_stall,    name: "Stall Detection",       sorting_weight: 24 }
-    - { id: group_security, name: "Security / Tamper",     sorting_weight: 45 }
+    - { id: group_tamper,   name: "Tamper",                sorting_weight: 45 }
     - { id: group_sg_adv,   name: "StallGuard (advanced)", sorting_weight: 70 }

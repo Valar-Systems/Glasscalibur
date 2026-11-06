@@ -23,7 +23,7 @@
 #   Driver    : TMC2209 stepper driver, single-wire UART control (PDN_UART)
 #   Motor     : NEMA stepper, 8x microstepping = 1600 steps/rev
 #   End stops : two physical limit switches (one at each end of travel)
-#   Sensors   : TMP1075 motor temperature (I2C 0x49) — auto-stops at >80 °C
+#   Sensors   : TMP1075 motor temperature (I2C 0x49) — warning, start gate and lockout (temperature.yaml)
 #               LIS2DH12 accelerometer (I2C 0x19) — anti-tamper + vib stall
 #   Buzzer    : passive piezo on a ledc PWM output (tamper alarm)
 #
