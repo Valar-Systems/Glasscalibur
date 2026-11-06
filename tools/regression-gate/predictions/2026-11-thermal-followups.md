@@ -85,3 +85,16 @@ W1 Wording: the P8 push scan, the docs claims scan and the local motor-term chec
   **lockout within 20 s of the unplug.** `thermal_stale_s` stays 15.
 - The 2.2.0 list is unchanged otherwise: L1–L6, F1–F6, TP-1, TP-2, EN-2, on a build
   of main at this PR's merge commit.
+
+## Amendment 1 — R1 re-registered (ruling, 2026-11-06; appended, nothing above was edited)
+
+The miss is kept on record. R1 registered a base fact that was never true: "stop_action's
+first step is still motion_halt". In the base and in the head the first step is the
+`logger.log` line and motion_halt is the second. Reading: the head passed 6 of 7 facts
+(the stop fact failed); the base, run as the sabotage, failed all 7 (registered: only the
+event-type, schedule and substitution facts).
+
+Re-registered fact: `stop_action` runs `motion_halt` before the new pending-move cancel
+(`thermal_cancel_pending`), and otherwise keeps the base's steps in order.
+Sabotage: a scratch copy of the head with those two steps swapped fails it.
+The other six R1 facts and their sabotage are unchanged.
