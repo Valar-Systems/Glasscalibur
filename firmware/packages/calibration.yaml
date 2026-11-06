@@ -363,6 +363,9 @@ script:
                 level: WARN
                 format: "CAL: refused - thermal lockout (clears below %.0f degC)"
                 args: ['(float) ${thermal_clear_c}']
+            - event.trigger:
+                id: thermal_event
+                event_type: refused
             - script.stop: auto_calibrate
       - if:
           condition:
@@ -372,6 +375,9 @@ script:
                 level: WARN
                 format: "CAL: refused - motor temp %.1f degC (limit %.0f, NAN = sensor absent)"
                 args: ['id(motor_temp).state', '(float) ${thermal_warn_c}']
+            - event.trigger:
+                id: thermal_event
+                event_type: refused
             - script.stop: auto_calibrate
 
       - logger.log: "CAL: starting - keep the window path clear"

@@ -83,6 +83,8 @@ substitutions:
   thermal_lockout_c:   "60"        # stop and latch the thermal lockout
   thermal_clear_c:     "48"        # the lockout clears (and the warning re-arms) below this
   thermal_stale_s:     "15"        # no valid reading for this long = the same lockout
+  thermal_resume_c:    "50"        # a scheduled move the gate refused runs once the motor reads below this
+  thermal_pending_s:   "1800"      # ... if that happens within this long; otherwise it is dropped
   # True when no new motion may start: the lockout is set, or there is no valid
   # reading (none yet after boot, or a failed read), or the motor is too warm.
   thermal_blocked: "(id(thermal_lockout) || isnan(id(motor_temp).state) || id(motor_temp).state >= ${thermal_start_max_c})"

@@ -204,6 +204,7 @@ cover:
     stop_action:
       - logger.log: "COVER stop_action"
       - script.execute: motion_halt
+      - script.execute: thermal_cancel_pending
       - if:
           condition:
             lambda: 'return id(cal_active);'
@@ -211,7 +212,8 @@ cover:
             - script.execute: cal_abort
 
     # Each motion action checks the thermal start gate first: refused, it only
-    # logs why (a move already under way is not stopped; STOP does that).
+    # logs why and fires Thermal Alert "refused" (a move already under way is not
+    # stopped; STOP does that). Accepted, it cancels a pending scheduled move.
     # Otherwise a user Open / Close / Set-position during calibration ends the
     # calibration first (cal_abort, as STOP does), then carries out the move with
     # the normal detector posture. Calibration drives through drive_open /
@@ -226,6 +228,7 @@ cover:
                 id: thermal_refused
                 what: "Open"
           else:
+            - script.execute: thermal_cancel_pending
             - if:
                 condition:
                   lambda: 'return id(cal_active);'
@@ -244,6 +247,7 @@ cover:
                 id: thermal_refused
                 what: "Close"
           else:
+            - script.execute: thermal_cancel_pending
             - if:
                 condition:
                   lambda: 'return id(cal_active);'
@@ -262,6 +266,7 @@ cover:
                 id: thermal_refused
                 what: "Set position"
           else:
+            - script.execute: thermal_cancel_pending
             - if:
                 condition:
                   lambda: 'return id(cal_active);'
@@ -474,23 +479,40 @@ script:
   # "Schedule Enabled" (and sun mode); this product adds only its own guard —
   # never drive the cover into a calibration probe in progress (a scheduled move
   # mid-cal would re-target the stepper and corrupt it; it reconciles on the next
-  # tick after calibration ends).
+  # tick after calibration ends). A move the thermal start gate refuses is kept
+  # pending (thermal_hold_scheduled, packages/temperature.yaml).
   - id: schedule_open
     then:
       - if:
           condition:
             lambda: 'return !id(cal_active);'
           then:
-            - logger.log: "Schedule: opening cover"
-            - cover.open: glasscalibur_cover
+            - if:
+                condition:
+                  lambda: 'return ${thermal_blocked};'
+                then:
+                  - script.execute:
+                      id: thermal_hold_scheduled
+                      which: 1
+                else:
+                  - logger.log: "Schedule: opening cover"
+                  - cover.open: glasscalibur_cover
   - id: schedule_close
     then:
       - if:
           condition:
             lambda: 'return !id(cal_active);'
           then:
-            - logger.log: "Schedule: closing cover"
-            - cover.close: glasscalibur_cover
+            - if:
+                condition:
+                  lambda: 'return ${thermal_blocked};'
+                then:
+                  - script.execute:
+                      id: thermal_hold_scheduled
+                      which: 2
+                else:
+                  - logger.log: "Schedule: closing cover"
+                  - cover.close: glasscalibur_cover
 
   # Firmware stop: halt at once, report IDLE, save the position. Used by the
   # limit switches, calibration and stall handling — every stop that is not the

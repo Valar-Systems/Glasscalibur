@@ -156,7 +156,7 @@ Other things you may see:
 | Sign | Means | What to do |
 | --- | --- | --- |
 | **Thermal Alert** `warning` | The motor read 50 °C or more. | Moves still run. Check the window moves freely. |
-| A command does nothing, log `… refused - …` | The start gate (see [Motor temperature](#motor-temperature)). | Let the motor cool. STOP always works. |
+| A command does nothing, log `… refused - …`, **Thermal Alert** `refused` | The start gate (see [Motor temperature](#motor-temperature)). | Let the motor cool. STOP always works. A refused scheduled move waits (see below). |
 | **Thermal Lockout** on, four chirps, **Thermal Alert** `lockout` | The motor read 60 °C or more; motion stopped. | Let it cool: it clears below 48 °C (**Thermal Alert** `cleared`). Check the window moves freely. |
 | **Thermal Lockout** on, **Thermal Alert** `sensor_lost` | No valid temperature reading for 15 s. | Check the temperature board and its cable. It clears on a reading below 48 °C. |
 | **Obstruction** event, the window backs off ~8 mm | A stall detector stopped a move. | Clear the path. Repeated stops on a clear path: run **Auto‑Calibrate**. |
@@ -171,12 +171,19 @@ Other things you may see:
 | Reading | What happens |
 | --- | --- |
 | 50 °C or more | A warning in the log and **Thermal Alert** `warning`, once until a reading below 48 °C. |
-| 55 °C or more | **Start gate:** no new motion starts. Open, Close and Set‑position (web UI, Home Assistant, the API, Button 1, schedules) and Auto‑Calibrate are refused and logged. A move already under way continues. |
+| 55 °C or more | **Start gate:** no new motion starts. Open, Close and Set‑position (web UI, Home Assistant, the API, Button 1, schedules) and Auto‑Calibrate are refused, logged, and announced with **Thermal Alert** `refused`. A move already under way continues. |
 | 60 °C or more | **Thermal lockout:** motion stops (a stall back‑off already under way finishes), a running calibration ends, four chirps, **Thermal Alert** `lockout`, **Thermal Lockout** on. Nothing new starts until a reading below 48 °C clears it (**Thermal Alert** `cleared`). |
 | No valid reading for 15 s | The same lockout, with **Thermal Alert** `sensor_lost`. Counted from boot; until the first reading after boot, the start gate refuses. |
 
-**STOP** always works. A restart clears the lockout; the start gate still applies. A
-scheduled open or close that the gate refuses is not retried.
+**STOP** always works. A restart clears the lockout; the start gate still applies.
+
+**Refused scheduled moves wait.** A scheduled open or close that the gate refuses is
+kept pending (a later refused one replaces it) and runs once the motor reads below
+50 °C with the gate open, if that happens within 30 minutes; otherwise it is dropped
+and logged. It is also dropped if **Schedule Enabled** is off by then. Any later
+command the gate accepts, and any STOP, cancels it. Manual commands are not retried.
+The 50 °C and 30 minutes are the `thermal_resume_c` and `thermal_pending_s`
+substitutions.
 
 ## Stall detection and tamper
 
@@ -209,7 +216,7 @@ categories.
 | Button 1 | binary sensor | the unit's button |
 | Child Lock | switch (config) | the unit's button ignores presses; remote control keeps working |
 | Obstruction | event | `obstructed`, once per stall that stops a move outside calibration |
-| Thermal Alert | event | `warning`, `lockout`, `sensor_lost`, `cleared` (see [Motor temperature](#motor-temperature)) |
+| Thermal Alert | event | `warning`, `lockout`, `sensor_lost`, `cleared`, `refused` (see [Motor temperature](#motor-temperature)) |
 
 **Motion Tuning**
 
