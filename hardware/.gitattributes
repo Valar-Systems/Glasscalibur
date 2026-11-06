@@ -1,0 +1,4 @@
+# CAD files are stored byte for byte: no line-ending conversion.
+*.step binary
+*.stp binary
+*.stl binary
