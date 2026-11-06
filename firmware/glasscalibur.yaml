@@ -4,7 +4,8 @@
 # Sets this board's chip, GPIO map, OTA identity, and hardware constants, then
 # pulls the shared valar-core + scheduling from Valar-Systems/valar-motion as
 # packages and layers the Glasscalibur product (window cover, limit switches,
-# accelerometer tamper/stall, buzzer, auto-calibration) on top.
+# accelerometer tamper/stall, buzzer, auto-calibration) on top, as the local
+# packages in firmware/packages/. This is the one entry file to build.
 #
 # Glasscalibur differs from the VAL30xx reference boards in hardware: a 220 mOhm
 # sense resistor, immediate-stop deceleration, and a fixed counter-clockwise
@@ -90,4 +91,18 @@ packages:
     ref: v0.3.0
     files: [common/scheduling.yaml]
     refresh: 1d
-  product: !include ./glasscalibur-product.yaml
+  # The Glasscalibur product, one local package per function (firmware/packages/).
+  # Merged in this order after core and scheduling. The order keeps the four
+  # intervals registering as they always have: motion's 200 ms completion poll,
+  # tamper's 1 s check, stall's 200 ms vibration check, calibration's 100 ms
+  # sampler.
+  system: !include packages/system.yaml
+  web_ui: !include packages/web-ui.yaml
+  motion: !include packages/motion.yaml
+  limits: !include packages/limits.yaml
+  faults: !include packages/faults.yaml
+  tamper: !include packages/tamper.yaml
+  stall: !include packages/stall.yaml
+  calibration: !include packages/calibration.yaml
+  temperature: !include packages/temperature.yaml
+  buttons: !include packages/buttons.yaml

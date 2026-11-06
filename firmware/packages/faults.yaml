@@ -1,0 +1,38 @@
+# =============================================================================
+# Glasscalibur - limit-switch faults
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+globals:
+  # Active limit faults, shown by the "Fault" text sensor (not persisted: a
+  # reboot clears them; the next travel re-raises any that still hold).
+  #   bit 0 (1) open switch position out of range   cleared by an accepted learning
+  #   bit 1 (2) open limit switch not detected      cleared by the next S4 press
+  #   bit 2 (4) close limit switch not detected     cleared by the next S5 press
+  - id: limit_faults
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+text_sensor:
+
+  # Limit-switch faults (limit_faults bits), "None" when clear. Each is also
+  # logged at WARN when raised; see the limit_faults global for what clears it.
+  - platform: template
+    name: "Fault"
+    id: limit_fault_text
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_diagnostics
+    update_interval: 5s
+    lambda: |-
+      const int f = id(limit_faults);
+      if (f == 0) return {"None"};
+      std::string s;
+      if (f & 1) s += "open switch position out of range";
+      if (f & 2) { if (!s.empty()) s += "; "; s += "open limit switch not detected"; }
+      if (f & 4) { if (!s.empty()) s += "; "; s += "close limit switch not detected"; }
+      return {s};

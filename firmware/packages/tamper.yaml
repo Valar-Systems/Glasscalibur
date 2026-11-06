@@ -1,0 +1,324 @@
+# =============================================================================
+# Glasscalibur - accelerometer, tamper check and buzzer
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+globals:
+
+  # --- Anti-tamper baseline ---
+  # Captured by the "Set Tamper Baseline" button when the device is at rest in
+  # its mounted orientation. The interval-driven check compares live accel to
+  # these and flags tamper if Euclidean distance > tamper_threshold.
+  - id: tamper_baseline_x
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: tamper_baseline_y
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: tamper_baseline_z
+    type: float
+    restore_value: yes
+    initial_value: '-1.0'  # accelerometer is on the bottom of the PCB facing
+                           # down, so at rest Z reads -1g (gravity). Overwritten
+                           # by "Set Tamper Baseline" on first calibration.
+  # Latched tamper state. Cleared only by the "Clear Tamper Alert" button so a
+  # bumped-then-replaced device doesn't silently un-flag itself.
+  - id: tamper_detected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: tamper_count
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+# -----------------------------------------------------------------------------
+# Buzzer (passive piezo on GPIO5, driven by ledc PWM)
+# -----------------------------------------------------------------------------
+# Used by the tamper_alarm script. Frequency and duty are set per-pulse from
+# the script (2700 Hz / 50 % gives a clear, audible square wave).
+output:
+  - platform: ledc
+    pin: GPIO5
+    id: buzzer
+
+binary_sensor:
+
+  # Anti-tamper status. Set by the 1 s tamper-check interval; latched until
+  # the "Clear Tamper Alert" button is pressed.
+  - platform: template
+    name: "Tamper Detected"
+    id: tamper_sensor
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 5
+      sorting_group_id: group_security
+    lambda: 'return id(tamper_detected);'
+
+number:
+
+
+# --- Anti-tamper threshold (g) ---
+# Euclidean distance between current accel and baseline that triggers a
+# tamper alert. 0.30g ≈ 17° tilt or a moderate bump. Tune downward if you
+# want more sensitivity, upward if you see false positives.
+  - platform: template
+    name: "Tamper Threshold"
+    id: tamper_threshold
+    web_server:
+      sorting_weight: 2
+      sorting_group_id: group_security
+    step: 0.05
+    min_value: 0.05
+    max_value: 2.0
+    mode: BOX
+    entity_category: CONFIG
+    unit_of_measurement: "g"
+    optimistic: true
+    restore_value: true
+    initial_value: 0.30
+
+switch:
+
+  # (Schedule Enabled + Sun Schedule switches come from the scheduling mixin.)
+
+  # Master enable for tamper detection. When OFF the 1 s tamper-check interval
+  # is skipped entirely. Turning OFF also silences any active alarm and clears
+  # the TAMPERED state so the device doesn't keep beeping with detection
+  # "disabled". Turning ON auto-captures the current accel as the new baseline
+  # so the first check after enabling can't false-trip against a stale baseline
+  # taken from a different mounting position. Default OFF — user opts in.
+  - platform: template
+    name: "Tamper Detection"
+    id: tamper_enabled
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 1
+      sorting_group_id: group_security
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      # Baselines are stored in g (sensor states are m/s² — ESPHome
+      # convention) so they compare directly against Tamper Threshold.
+      - globals.set:
+          id: tamper_baseline_x
+          value: !lambda "return id(accel_x).state / 9.80665f;"
+      - globals.set:
+          id: tamper_baseline_y
+          value: !lambda "return id(accel_y).state / 9.80665f;"
+      - globals.set:
+          id: tamper_baseline_z
+          value: !lambda "return id(accel_z).state / 9.80665f;"
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - logger.log:
+          format: "Tamper detection enabled — baseline captured: x=%.3fg y=%.3fg z=%.3fg"
+          args: ['id(accel_x).state / 9.80665f', 'id(accel_y).state / 9.80665f', 'id(accel_z).state / 9.80665f']
+    turn_off_action:
+      - script.stop: tamper_alarm
+      - output.turn_off: buzzer
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - if:
+          condition:
+            lambda: 'return id(global_state) == 3;'
+          then:
+            - globals.set:
+                id: global_state
+                value: "0"
+      - logger.log: "Tamper detection disabled"
+
+# -----------------------------------------------------------------------------
+# Anti-tamper calibration / acknowledgement
+# -----------------------------------------------------------------------------
+# Press "Set Tamper Baseline" once the device is mounted in its final position
+# and at rest — this captures the current X/Y/Z reading as the "untampered"
+# reference. Any subsequent orientation change beyond Tamper Threshold (g)
+# while IDLE flags Tamper Detected. The alert is latched so a bumped-then-
+# replaced device doesn't silently un-flag; press "Clear Tamper Alert" to
+# acknowledge.
+button:
+  - platform: template
+    name: "Set Tamper Baseline"
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 3
+      sorting_group_id: group_security
+    on_press:
+      # Stored in g — see the note on the Tamper Detection switch.
+      - globals.set:
+          id: tamper_baseline_x
+          value: !lambda "return id(accel_x).state / 9.80665f;"
+      - globals.set:
+          id: tamper_baseline_y
+          value: !lambda "return id(accel_y).state / 9.80665f;"
+      - globals.set:
+          id: tamper_baseline_z
+          value: !lambda "return id(accel_z).state / 9.80665f;"
+      - script.stop: tamper_alarm
+      - output.turn_off: buzzer
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - if:
+          condition:
+            lambda: 'return id(global_state) == 3;'
+          then:
+            - globals.set:
+                id: global_state
+                value: "0"
+      - logger.log:
+          format: "Tamper baseline captured: x=%.3fg y=%.3fg z=%.3fg"
+          args: ['id(accel_x).state / 9.80665f', 'id(accel_y).state / 9.80665f', 'id(accel_z).state / 9.80665f']
+
+  - platform: template
+    name: "Clear Tamper Alert"
+    entity_category: CONFIG
+    web_server:
+      sorting_weight: 4
+      sorting_group_id: group_security
+    on_press:
+      - script.stop: tamper_alarm
+      - output.turn_off: buzzer
+      - globals.set:
+          id: tamper_detected
+          value: "false"
+      - if:
+          condition:
+            lambda: 'return id(global_state) == 3;'
+          then:
+            - globals.set:
+                id: global_state
+                value: "0"
+      - logger.log: "Tamper alert cleared"
+
+  - platform: template
+    name: "Reset Tamper Trips"
+    entity_category: DIAGNOSTIC
+    web_server:
+      sorting_weight: 16
+      sorting_group_id: group_diagnostics
+    on_press:
+      - globals.set:
+          id: tamper_count
+          value: "0"
+      - logger.log: "Tamper trip counter reset"
+# -----------------------------------------------------------------------------
+# LIS2DH12 accelerometer
+# -----------------------------------------------------------------------------
+# 3-axis MEMS accelerometer on the PCB. Used for two things:
+#   1. Anti-tamper detection (checks orientation while IDLE).
+#   2. Vibration-based stall detection (backstops StallGuard).
+# SA0 is grounded on this board, so the I2C address is 0x18 (would be 0x19
+# if SA0 were pulled to VDD).
+lis2dh12_i2c:
+  id: accelerometer
+  i2c_id: i2c_bus
+  address: 0x18
+  range: 4G                  # ±4g — plenty for orientation + motor vibration
+  resolution: high           # 12-bit reads
+  output_data_rate: 100Hz    # chip samples 100x/sec
+  # 500 ms keeps the draft PR's status-poll cost manageable (its sync DRDY
+  # loop is what triggers "took a long time" warnings). The 1 s tamper check
+  # and 200 ms vib-stall check read the cached value, so vib detection latency
+  # is bounded by this — ~2.5 s worst case at the default 5-sample threshold,
+  # acceptable for a window cover. Tighten if you want snappier stall reaction.
+  update_interval: 500ms
+
+sensor:
+
+  - platform: lis2dh12_base
+    lis2dh12_id: accelerometer
+    acceleration_x:
+      name: "Accel X"
+      id: accel_x
+      entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 20
+        sorting_group_id: group_diagnostics
+    acceleration_y:
+      name: "Accel Y"
+      id: accel_y
+      entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 21
+        sorting_group_id: group_diagnostics
+    acceleration_z:
+      name: "Accel Z"
+      id: accel_z
+      entity_category: DIAGNOSTIC
+      web_server:
+        sorting_weight: 22
+        sorting_group_id: group_diagnostics
+  - platform: template
+    name: "Tamper Trips"
+    lambda: 'return id(tamper_count);'
+    update_interval: 30s
+    entity_category: DIAGNOSTIC
+    accuracy_decimals: 0
+    web_server:
+      sorting_weight: 13
+      sorting_group_id: group_diagnostics
+
+script:
+
+  - id: tamper_alarm
+    mode: restart
+    then:
+      - repeat:
+          count: 60
+          then:
+            - output.turn_on: buzzer
+            - output.ledc.set_frequency:
+                id: buzzer
+                frequency: "2700Hz"
+            - output.set_level:
+                id: buzzer
+                level: "50%"
+            - delay: 500ms
+            - output.turn_off: buzzer
+            - delay: 500ms
+      - output.turn_off: buzzer       # belt-and-suspenders if loop exits early
+
+interval:
+
+  # --- Anti-tamper check (only runs while IDLE so motion vibration can't
+  #     trip it). Latches tamper_detected = true on first trip; the binary
+  #     sensor follows the global; the "Clear Tamper Alert" button clears.
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(tamper_enabled).state) return false;
+              if (id(global_state) != 0) return false;
+              // Calibration shakes the device between travels (state is
+              // briefly 0 at each limit) — don't count that as tampering.
+              if (id(cal_active)) return false;
+              // Sensor states are m/s²; baselines and Tamper Threshold are
+              // in g — normalize the live readings before comparing.
+              constexpr float G_MS2 = 9.80665f;
+              float dx = id(accel_x).state / G_MS2 - id(tamper_baseline_x);
+              float dy = id(accel_y).state / G_MS2 - id(tamper_baseline_y);
+              float dz = id(accel_z).state / G_MS2 - id(tamper_baseline_z);
+              float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+              return dist > id(tamper_threshold).state;
+          then:
+            - globals.set:
+                id: tamper_detected
+                value: "true"
+            - globals.set:
+                id: global_state
+                value: "3"
+            - lambda: 'id(tamper_count) += 1;'
+            - script.execute: tamper_alarm
+            - logger.log:
+                level: WARN
+                format: "TAMPER DETECTED (deviation > %.2fg)"
+                args: ['id(tamper_threshold).state']

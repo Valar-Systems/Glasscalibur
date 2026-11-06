@@ -1,0 +1,25 @@
+# =============================================================================
+# Glasscalibur - web UI groups
+# =============================================================================
+# A local package merged by firmware/glasscalibur.yaml. Its items moved
+# verbatim from the former single product file.
+# =============================================================================
+
+# Web UI groups. Control / Schedule / Diagnostics come from core + the scheduling
+# mixin. Everything else is defined here so the page reads top-to-bottom as:
+# Control, Motion Tuning, Calibration, Stall Detection, Schedule, Security,
+# Diagnostics, StallGuard (advanced).
+#
+# A product can't re-weight a core group (redefining its id errors), so — as on
+# the Ropener — we define NEW groups and move the relevant entities into them,
+# leaving core's group_motion / group_stallguard / group_setup empty (empty groups
+# don't render). Motion Tuning sits above Schedule (25); the accelerometer-based
+# Stall Detection is its own first-class group (it is NOT a StallGuard feature),
+# while the TMC2209 StallGuard registers drop to an advanced group at the bottom.
+web_server:
+  sorting_groups:
+    - { id: group_tuning,   name: "Motion Tuning",         sorting_weight: 12 }
+    - { id: group_cal,      name: "Calibration",           sorting_weight: 22 }
+    - { id: group_stall,    name: "Stall Detection",       sorting_weight: 24 }
+    - { id: group_security, name: "Security / Tamper",     sorting_weight: 45 }
+    - { id: group_sg_adv,   name: "StallGuard (advanced)", sorting_weight: 70 }
