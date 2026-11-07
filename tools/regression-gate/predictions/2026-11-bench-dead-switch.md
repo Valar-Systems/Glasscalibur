@@ -51,3 +51,20 @@ D4 Wording: the push gate passes on the diff, every commit, the messages and the
   no power cycles.
 - L1-L6 run on the old carriage (the only one on hand): L1's learned stroke doubles as L6's
   reading. When the new carriage arrives, L1, L3 and L4 are rechecked on it.
+
+## Note — the schematic (Daniel, Main-PCB-V6, 2026-11-06; appended, nothing above was edited)
+
+LIMIT-1 (S4) and LIMIT-2 (S5) are the same circuit: a 20 kΩ pull-up to 3V3 on the switch
+node, the switch to GND, a 5.1 kΩ series resistor to the ESP32 pin, 100 nF to GND and a
+TVS diode. A broken switch or a cracked joint at the switch reads released (pulled up,
+inverted), so the simulation stands as designed.
+
+Also noted: if the 5.1 kΩ series resistor's joint cracks, the ESP32 pin is left
+unconnected, and with `mode: INPUT` (no internal pull-up) it floats. Enabling the internal
+pull-up on GPIO15 and GPIO3 would hold it released; with this circuit a pressed switch
+still reads low (about 0.3 V). That is a product change, proposed separately; not in this
+bench change.
+
+Correction to the design text above: S4's product filters are `delayed_on: 10ms` and
+`delayed_off: 30ms`, like S5's (check D2 compares the lists as resolved, so it is not
+affected).
