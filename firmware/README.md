@@ -33,8 +33,10 @@ supplied 24 V DC adapter.
 - **From a computer:** `esphome run firmware/glasscalibur.yaml` (pick the network
   target), the ESPHome dashboard, or the unit's own web page upload with a
   `Glasscalibur.ota.bin`.
-- **The motor stops when an update begins**, however it was started; the position
-  is saved at the restart.
+- **The motor stops when an update begins**, however it was started, and no move
+  starts until the update ends: Open, Close, Set position (scheduled ones included)
+  and Auto-Calibrate are refused, with a log line. A failed or cancelled update allows
+  moves again; a finished one restarts the unit, which saves the position first.
 
 **Releases (maintainers).** Pushing a tag `vX.Y.Z` runs
 [`build-release.yml`](../.github/workflows/build-release.yml): it compiles with the
@@ -148,7 +150,9 @@ Distances are counted from the close switch trigger (position 0) at 3066.7 steps
 
 The position is written to flash at once at every stop, and a "move in progress" marker
 is written before each move starts and cleared at its stop; nothing is written while
-the motor moves. A planned restart (Restart, an update) saves the exact stop point.
+the motor moves. Settings changed while the motor is idle reach flash within 30 s; one
+changed during a move is saved at its stop. A planned restart (Restart, an update)
+stops the motor first, then saves the exact stop point.
 
 The position is **unknown** when, at startup, the marker is still set (the last move was
 cut off by a power cut or an unplanned restart), or the position was saved at an end
@@ -181,6 +185,7 @@ Other things you may see:
 | --- | --- | --- |
 | **Thermal Alert** `warning` | The motor read 50 °C or more. | Moves still run. Check the window moves freely. |
 | A command does nothing, log `… refused - …`, **Thermal Alert** `refused` | The start gate (see [Motor temperature](#motor-temperature)). | Let the motor cool. STOP always works. A refused scheduled move waits (see below). |
+| A command does nothing, log `… refused - firmware update in progress` | An update is running (see [Flashing and updates](#flashing-and-updates)). | Wait for it to finish; the unit restarts. If the update fails, moves work again. |
 | **Thermal Lockout** on, four chirps, **Thermal Alert** `lockout` | The motor read 60 °C or more; motion stopped. | Let it cool: it clears below 48 °C (**Thermal Alert** `cleared`). Check the window moves freely. |
 | **Thermal Lockout** on, **Thermal Alert** `sensor_lost` | No valid temperature reading for 15 s. | Check the temperature board and its cable. It clears on a reading below 48 °C. |
 | **Obstruction** event, the window backs off ~8 mm | A stall detector stopped a move. | Clear the path. Repeated stops on a clear path: run **Auto‑Calibrate**. |

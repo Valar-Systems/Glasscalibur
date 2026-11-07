@@ -29,6 +29,16 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   shows *position unknown - close or open fully*, the next Close runs until the close
   switch (at most a full stroke + 2 mm) and the next Open until the open switch, and a
   Set position closes to the close switch first.
+- **Restart mid-move.** A restart (the Restart button, the end of an update) saved the
+  position before the motor was told to stop. It now stops the motor first, then saves
+  where it stopped.
+- **Moves during an update.** The motor stopped when an update began, but a new
+  command could start it again while the update was writing. Open, Close, Set
+  position (scheduled ones included) and Auto-Calibrate are now refused, with a log
+  line, until the update ends or fails.
+- **Settings saved while idle.** Settings changed while the motor is idle reach flash
+  within 30 s (was up to 60 s, at any time); one changed during a move is saved at its
+  stop.
 
 ## [2.2.0] - unreleased
 

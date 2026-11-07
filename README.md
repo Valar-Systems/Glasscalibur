@@ -65,7 +65,8 @@ All of these come from the firmware in [`firmware/`](firmware):
 - **Position across reboots** — the position is saved while moving and at every
   restart, including the restart at the end of a firmware update.
 - **Updates over the air** — the **Update Firmware (GitHub)** button installs the
-  latest release; the motor stops when an update begins.
+  latest release; the motor stops when an update begins, and no move starts until it
+  ends.
 
 <p>
 <img src="docs/images/installed-closeup.jpg" alt="Glasscalibur mounted along the bottom of a horizontal sliding window, close up" width="49%">
