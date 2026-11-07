@@ -76,7 +76,12 @@ binary_sensor:
       sorting_group_id: group_diagnostics
     pin:
       number: GPIO15
-      mode: INPUT
+      # The board pulls the switch node up (20 kOhm) and feeds the pin through 5.1 kOhm;
+      # the internal pull-up keeps the pin from floating if that link breaks, so a
+      # broken link reads released (a dead switch) instead of random presses.
+      mode:
+        input: true
+        pullup: true
       inverted: true
     # Interrupts are not reliable, they constatnly miss. Use polling
     use_interrupt: false
@@ -179,7 +184,12 @@ binary_sensor:
       sorting_group_id: group_diagnostics
     pin:
       number: GPIO3
-      mode: INPUT
+      # The board pulls the switch node up (20 kOhm) and feeds the pin through 5.1 kOhm;
+      # the internal pull-up keeps the pin from floating if that link breaks, so a
+      # broken link reads released (a dead switch) instead of random presses.
+      mode:
+        input: true
+        pullup: true
       inverted: true
     # Interrupts are not reliable, they constatnly miss. Use polling
     use_interrupt: false

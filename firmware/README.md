@@ -323,7 +323,7 @@ categories.
 | TMC2209 INDEX / DIAG | 6 / 14 |
 | Button 1 | 23 |
 | Wi‑Fi / Calibrate button | 21 |
-| Open switch (S4) | 15 |
-| Close switch (S5) | 3 |
+| Open switch (S4) | 15 (input, internal pull-up on) |
+| Close switch (S5) | 3 (input, internal pull-up on) |
 | Buzzer | 5 |
 | I2C SDA / SCL | 19 / 20 (LIS2DH12 at 0x18, TMP1075 at 0x49) |
