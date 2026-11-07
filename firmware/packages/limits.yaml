@@ -213,6 +213,13 @@ binary_sensor:
             condition:
               lambda: 'return id(global_state) != 1;'
             then:
+              # The counter where S5 triggered. After a power cut, the recovery
+              # close's start count minus this is how far from S5 the carriage
+              # really stopped.
+              - lambda: |-
+                  const int32_t trig = id(driver)->current_position;
+                  ESP_LOGI("limit", "S5 triggered at %d steps (%.2f mm)", (int) trig,
+                           trig / (float) ${steps_per_mm});
               - stepper.report_position:
                   id: driver
                   position: 0

@@ -351,6 +351,14 @@ script:
       # ---- 1. Preconditions ------------------------------------------------
       - if:
           condition:
+            lambda: 'return id(ota_active);'
+          then:
+            - logger.log:
+                level: WARN
+                format: "CAL: refused - firmware update in progress"
+            - script.stop: auto_calibrate
+      - if:
+          condition:
             lambda: 'return id(global_state) != 0 || id(tamper_detected) || id(cal_active);'
           then:
             - logger.log: "CAL: refused - busy, tampered, or already calibrating"

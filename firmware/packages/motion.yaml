@@ -86,17 +86,20 @@ esphome:
   # the board's motor_direction_default). Timezone / lat-long re-apply is done by
   # the scheduling mixin's priority -100 on_boot. This product adds only what core
   # can't know about: the current clamp and limit-switch homing.
-  # Capture where the motor actually is at every soft reboot (Restart button,
-  # end of a firmware update, any App.reboot). ESPHome runs on_shutdown hooks in
-  # reverse setup-priority order, so at priority 600 this runs before the
-  # globals store their values (800) and before the preference syncer flushes
-  # them to flash (1000) — the saved position is the stop point, not the start
-  # of the travel, so the move-in-progress marker is cleared too. A power cut or
-  # an unplanned restart skips shutdown: the marker then stays set (see on_boot).
+  # Every soft reboot (Restart button, end of a firmware update, any App.reboot):
+  # halt the motor, then capture where it stopped and clear the move-in-progress
+  # marker. ESPHome runs on_shutdown hooks in reverse setup-priority order, so at
+  # priority 600 this runs before the driver's own shutdown stop (800), the
+  # globals storing their values (800) and the preference syncer's flush (1000).
+  # Halt first: stop() writes VACTUAL 0 and returns once the UART has sent it
+  # (tmc2209_api write_register reads the one-wire echo back, then flushes), so
+  # the saved position is where the motor really stopped. A power cut or an
+  # unplanned restart skips shutdown: the marker then stays set (see on_boot).
   on_shutdown:
     - priority: 600
       then:
         - lambda: |-
+            id(driver)->stop();
             id(global_current_position) = id(driver)->current_position;
             id(move_marker) = false;
   on_boot:
@@ -222,7 +225,13 @@ esphome:
               id(limit_faults) |= 8;
               ESP_LOGW("limit", "Position unknown: the next Close runs until S5, the next Open until S4");
             }
-        - script.execute: position_commit
+        # Commit (clearing the marker) only while the motor is idle: a move that has
+        # already started commits at its own stop.
+        - if:
+            condition:
+              lambda: 'return id(global_state) == 0;'
+            then:
+              - script.execute: position_commit
         - component.update: limit_fault_text
 
 # -----------------------------------------------------------------------------
@@ -280,24 +289,35 @@ cover:
           then:
             - script.execute: cal_abort
 
-    # Each motion action checks the thermal start gate first: refused, it logs
-    # why and fires Thermal Alert "refused" (a move already under way is not
-    # stopped; STOP does that). Accepted or refused, it cancels a pending
-    # scheduled move: the newest command wins.
+    # Each motion action checks its start gates first. While a firmware update
+    # runs (ota_active, packages/system.yaml) it refuses with a log line; the
+    # update's own STOP has already halted the motor. Otherwise the thermal
+    # gate: refused, it logs why and fires Thermal Alert "refused" (a move
+    # already under way is not stopped; STOP does that). Accepted or refused, it
+    # cancels a pending scheduled move: the newest command wins.
     # Otherwise a user Open / Close / Set-position during calibration ends the
     # calibration first (cal_abort, as STOP does), then carries out the move with
     # the normal detector posture. Calibration drives through drive_open /
     # drive_close directly, so its own travels never abort it.
     open_action:
-      # Thermal start gate first (see packages/temperature.yaml).
+      # Start gates first: a firmware update in progress, then the thermal gate
+      # (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return ${thermal_blocked};'
+            lambda: 'return id(ota_active) || ${thermal_blocked};'
           then:
             - script.execute: thermal_cancel_pending
-            - script.execute:
-                id: thermal_refused
-                what: "Open"
+            - if:
+                condition:
+                  lambda: 'return id(ota_active);'
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Open refused - firmware update in progress"
+                else:
+                  - script.execute:
+                      id: thermal_refused
+                      what: "Open"
           else:
             - script.execute: thermal_cancel_pending
             - if:
@@ -309,15 +329,24 @@ cover:
             - script.execute: drive_open
 
     close_action:
-      # Thermal start gate first (see packages/temperature.yaml).
+      # Start gates first: a firmware update in progress, then the thermal gate
+      # (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return ${thermal_blocked};'
+            lambda: 'return id(ota_active) || ${thermal_blocked};'
           then:
             - script.execute: thermal_cancel_pending
-            - script.execute:
-                id: thermal_refused
-                what: "Close"
+            - if:
+                condition:
+                  lambda: 'return id(ota_active);'
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Close refused - firmware update in progress"
+                else:
+                  - script.execute:
+                      id: thermal_refused
+                      what: "Close"
           else:
             - script.execute: thermal_cancel_pending
             - if:
@@ -329,15 +358,24 @@ cover:
             - script.execute: drive_close
 
     position_action:
-      # Thermal start gate first (see packages/temperature.yaml).
+      # Start gates first: a firmware update in progress, then the thermal gate
+      # (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return ${thermal_blocked};'
+            lambda: 'return id(ota_active) || ${thermal_blocked};'
           then:
             - script.execute: thermal_cancel_pending
-            - script.execute:
-                id: thermal_refused
-                what: "Set position"
+            - if:
+                condition:
+                  lambda: 'return id(ota_active);'
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "Set position refused - firmware update in progress"
+                else:
+                  - script.execute:
+                      id: thermal_refused
+                      what: "Set position"
           else:
             - script.execute: thermal_cancel_pending
             - if:
@@ -369,8 +407,16 @@ cover:
                               # handler runs the pending target).
                               - script.execute: drive_close
                               - lambda: |-
-                                  id(pending_pos) = pos;
-                                  ESP_LOGI("limit", "Position unknown: closing to S5 first, then to %.0f %%", pos * 100.0f);
+                                  if (!id(pos_unknown)) {
+                                    // S5 was already pressed: settled at once, so go there now.
+                                    ESP_LOGI("limit", "Position known at S5 - moving to the requested %.0f %%", pos * 100.0f);
+                                    auto call = id(glasscalibur_cover).make_call();
+                                    call.set_position(pos);
+                                    call.perform();
+                                  } else {
+                                    id(pending_pos) = pos;
+                                    ESP_LOGI("limit", "Position unknown: closing to S5 first, then to %.0f %%", pos * 100.0f);
+                                  }
                             else:
                               - lambda: |-
                                   id(motion_start_ms) = millis();
@@ -516,9 +562,10 @@ select:
       # calibration has succeeded (see sg_calibrated).
       - stepper.set_speed: { id: driver, speed: !lambda "return ${effective_speed};" }
       - lambda: |-
-          // Persist immediately so the choice survives an unplug seconds later.
+          // Persist at once so the choice survives an unplug seconds later - unless
+          // the motor is moving: then it reaches flash at the stop.
           global_speed->update();
-          global_preferences->sync();
+          if (id(global_state) != 1 && id(global_state) != 2) global_preferences->sync();
 
   - id: !remove sel_direction
 
@@ -626,101 +673,137 @@ script:
   # from a fresh S5 home is a learning open (see limit_switch_1).
   - id: drive_open
     then:
-      - lambda: |-
-          id(motion_start_ms) = millis();
-          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-          id(sg_fired_this_move) = false;
-          id(stall_release_active) = false; // a new move gets its own stall release
-          id(learn_this_open) = id(homed_fresh) && !id(pos_unknown);
-          id(homed_fresh) = false;
-          id(open_to_end) = true;
-          id(close_to_end) = false;
-          id(pending_pos) = -1.0f;          // a new Open replaces a pending set position
-          const float spm = ${steps_per_mm};
-          if (id(pos_unknown))
-            ESP_LOGW("limit", "Position unknown: opening until S4 (at most the stroke + %.1f mm)",
-                     ${seek_margin_mm});
-          const int32_t learned = id(open_stroke_steps);
-          if (learned > 0) {
-            ESP_LOGI("limit", "Open stroke %.2f mm (learned); open target %.2f mm%s",
-                     learned / spm, learned / spm + ${open_margin_mm},
-                     id(learn_this_open) ? "; from a fresh home - will re-learn" : "");
-          } else {
-            ESP_LOGI("limit", "Open stroke not learned yet; open target %.2f mm%s",
-                     ${open_default_mm}, id(learn_this_open) ? "; from a fresh home - will learn" : "");
-          }
-      - globals.set:
-          id: global_state
-          value: "1"
-      # Fast until calibration has succeeded (calibration's own travels use the
-      # user's speed — it tunes StallGuard there).
-      - stepper.set_speed:
-          id: driver
-          speed: !lambda "return ${effective_speed};"
-      - script.execute: move_begin
-      - stepper.set_target:
-          id: driver
-          target: !lambda |-
-            const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
-                                                            : (int32_t) (${open_default_mm} * ${steps_per_mm});
-            // Position unknown: until S4, at most a full stroke + seek_margin_mm from here.
-            if (id(pos_unknown))
-              return id(driver)->current_position + stroke + (int32_t) (${seek_margin_mm} * ${steps_per_mm});
-            return id(open_stroke_steps) > 0
-                ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
-                : (int32_t) (${open_default_mm} * ${steps_per_mm});
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: OPENING
+      - if:
+          condition:
+            lambda: 'return id(pos_unknown) && id(limit_switch_1).state;'
+          then:
+            # Position unknown but S4 is already pressed (its level): the carriage is
+            # at S4. Settle at the learned stroke; start no move.
+            - lambda: |-
+                const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                id(driver)->report_position(stroke);
+                id(driver)->set_target(stroke);
+                id(pos_unknown) = false;
+                id(limit_faults) &= ~8;
+                ESP_LOGI("limit", "Open with the position unknown: S4 already pressed - fully open, no move");
+            - script.execute: motion_halt      # IDLE, and the position is committed
+            - component.update: limit_fault_text
+          else:
+            - lambda: |-
+                id(motion_start_ms) = millis();
+                id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+                id(sg_fired_this_move) = false;
+                id(stall_release_active) = false; // a new move gets its own stall release
+                id(learn_this_open) = id(homed_fresh) && !id(pos_unknown);
+                id(homed_fresh) = false;
+                id(open_to_end) = true;
+                id(close_to_end) = false;
+                id(pending_pos) = -1.0f;          // a new Open replaces a pending set position
+                const float spm = ${steps_per_mm};
+                if (id(pos_unknown))
+                  ESP_LOGW("limit", "Position unknown: opening until S4 (at most the stroke + %.1f mm)",
+                           ${seek_margin_mm});
+                const int32_t learned = id(open_stroke_steps);
+                if (learned > 0) {
+                  ESP_LOGI("limit", "Open stroke %.2f mm (learned); open target %.2f mm%s",
+                           learned / spm, learned / spm + ${open_margin_mm},
+                           id(learn_this_open) ? "; from a fresh home - will re-learn" : "");
+                } else {
+                  ESP_LOGI("limit", "Open stroke not learned yet; open target %.2f mm%s",
+                           ${open_default_mm}, id(learn_this_open) ? "; from a fresh home - will learn" : "");
+                }
+            - globals.set:
+                id: global_state
+                value: "1"
+            # Fast until calibration has succeeded (calibration's own travels use the
+            # user's speed — it tunes StallGuard there).
+            - stepper.set_speed:
+                id: driver
+                speed: !lambda "return ${effective_speed};"
+            - script.execute: move_begin
+            - stepper.set_target:
+                id: driver
+                target: !lambda |-
+                  const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                  : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                  // Position unknown: until S4, at most a full stroke + seek_margin_mm from here.
+                  if (id(pos_unknown))
+                    return id(driver)->current_position + stroke + (int32_t) (${seek_margin_mm} * ${steps_per_mm});
+                  return id(open_stroke_steps) > 0
+                      ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
+                      : (int32_t) (${open_default_mm} * ${steps_per_mm});
+            - cover.template.publish:
+                id: glasscalibur_cover
+                current_operation: OPENING
   # Close: at most close_overtravel_mm past the S5 zero — the close switch stops
   # it first; arriving there with it released is a fault (interval poll) and
   # makes the position unknown. While the position is unknown, the close runs
   # until S5: at most a full stroke + seek_margin_mm from here, stall detection on.
   - id: drive_close
     then:
-      - lambda: |-
-          id(motion_start_ms) = millis();
-          id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-          id(sg_fired_this_move) = false;
-          id(stall_release_active) = false; // a new move gets its own stall release
-          id(homed_fresh) = false;
-          id(learn_this_open) = false;
-          id(open_to_end) = false;
-          id(close_to_end) = true;
-          id(pending_pos) = -1.0f;          // a new Close replaces a pending set position
-          if (id(pos_unknown))
-            ESP_LOGW("limit", "Position unknown: closing until S5 (at most the stroke + %.1f mm)",
-                     ${seek_margin_mm});
-      - globals.set:
-          id: global_state
-          value: "2"
-      - stepper.set_speed:
-          id: driver
-          speed: !lambda "return ${effective_speed};"
-      - script.execute: move_begin
-      - stepper.set_target:
-          id: driver
-          target: !lambda |-
-            if (id(pos_unknown)) {
-              const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
-                                                              : (int32_t) (${open_default_mm} * ${steps_per_mm});
-              return id(driver)->current_position - stroke - (int32_t) (${seek_margin_mm} * ${steps_per_mm});
-            }
-            return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});
-      - cover.template.publish:
-          id: glasscalibur_cover
-          current_operation: CLOSING
+      - if:
+          condition:
+            lambda: 'return id(pos_unknown) && id(limit_switch_2).state;'
+          then:
+            # Position unknown but S5 is already pressed (its level, not a press
+            # edge): the carriage is at S5. Settle here; start no move.
+            - stepper.report_position: { id: driver, position: 0 }
+            - stepper.set_target: { id: driver, target: 0 }
+            - lambda: |-
+                id(pos_unknown) = false;
+                id(limit_faults) &= ~8;
+                id(homed_fresh) = true;
+                ESP_LOGI("limit", "Close with the position unknown: S5 already pressed - closed, no move");
+            - script.execute: motion_halt      # IDLE, and the position is committed
+            - component.update: limit_fault_text
+          else:
+            - lambda: |-
+                id(motion_start_ms) = millis();
+                id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+                id(sg_fired_this_move) = false;
+                id(stall_release_active) = false; // a new move gets its own stall release
+                id(homed_fresh) = false;
+                id(learn_this_open) = false;
+                id(open_to_end) = false;
+                id(close_to_end) = true;
+                id(pending_pos) = -1.0f;          // a new Close replaces a pending set position
+                if (id(pos_unknown))
+                  ESP_LOGW("limit", "Position unknown: closing until S5 (at most the stroke + %.1f mm) "
+                           "from %d steps", ${seek_margin_mm}, (int) id(driver)->current_position);
+            - globals.set:
+                id: global_state
+                value: "2"
+            - stepper.set_speed:
+                id: driver
+                speed: !lambda "return ${effective_speed};"
+            - script.execute: move_begin
+            - stepper.set_target:
+                id: driver
+                target: !lambda |-
+                  if (id(pos_unknown)) {
+                    const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                    : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                    return id(driver)->current_position - stroke - (int32_t) (${seek_margin_mm} * ${steps_per_mm});
+                  }
+                  return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});
+            - cover.template.publish:
+                id: glasscalibur_cover
+                current_operation: CLOSING
 
   # Saving the position (option A): the move-in-progress marker goes to flash
   # before motion starts, and the stop point (with the marker cleared) at every
-  # stop. Nothing is written to flash while the motor moves; the 200 ms poll only
-  # refreshes the RAM copy. About 3 small writes per move.
+  # stop, after the halt. Nothing is written to flash while the motor moves:
+  # ESPHome's periodic flush is off (preferences below) and the 30 s flush
+  # (interval below) runs only while idle. About 3 small writes per move.
   - id: move_begin
     then:
       - lambda: |-
+          // A move already running (a reversal) has its marker stored: no flush mid-move.
+          const bool moving = id(driver)->current_position != id(driver)->target_position;
           id(move_marker) = true;
           move_marker->update();
-          global_preferences->sync();
+          if (!moving) global_preferences->sync();
   - id: position_commit
     then:
       - lambda: |-
@@ -755,13 +838,10 @@ script:
 interval:
   - interval: 200ms
     then:
-      # Keep the RAM copy of the position current while moving. It reaches flash
-      # only at the stop (position_commit) or a planned reboot (on_shutdown): a
-      # power cut or an unplanned restart mid-move loses it, and the
-      # move-in-progress marker then makes the position unknown at boot.
-      - lambda: |-
-          int s = id(global_state);
-          if (s == 1 || s == 2) id(global_current_position) = id(driver)->current_position;
+      # The saved position changes only at a stop (position_commit) or a planned
+      # reboot (on_shutdown), never while moving: a power cut or an unplanned
+      # restart mid-move leaves the move-in-progress marker set, and the position
+      # is then unknown at boot.
       - if:
           condition:
             lambda: |-
@@ -809,4 +889,17 @@ interval:
             - cover.template.publish:
                 id: glasscalibur_cover
                 current_operation: IDLE
+            - stepper.stop: driver              # halt before the flash write
             - script.execute: position_commit   # the stop point reaches flash at once
+  # Pending saves (settings changed while idle) reach flash within 30 s, only
+  # while the motor is idle; anything changed during a move reaches flash at its
+  # stop (position_commit). Replaces ESPHome's periodic flush (preferences below).
+  - interval: 30s
+    then:
+      - lambda: |-
+          const int s = id(global_state);
+          if (s != 1 && s != 2) global_preferences->sync();
+
+# ESPHome's 60 s periodic flush could land mid-move: off. The shutdown flush stays.
+preferences:
+  flash_write_interval: never

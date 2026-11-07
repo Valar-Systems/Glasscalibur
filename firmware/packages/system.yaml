@@ -227,13 +227,24 @@ logger:
     i2c.idf: INFO
     lis2dh12: INFO
 
+# Set while a firmware update runs: the cover's open / close / position actions
+# and auto_calibrate refuse to start a move. RAM only — a completed update
+# restarts the unit.
+globals:
+  - id: ota_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
 esphome:
   on_boot:
     # The motor stops when a firmware update begins, however it was started
     # (ESPHome, the device's own web page, or the "Update Firmware (GitHub)"
-    # button). Every OTA platform reports the start of an update to ESPHome's
-    # global OTA callback; this listener answers OTA_STARTED with the cover's
-    # normal STOP, so stop_action runs exactly as if the user had pressed STOP.
+    # button), and no move starts until the update fails or is aborted (a
+    # completed one restarts the unit). Every OTA platform reports its state to
+    # ESPHome's global OTA callback; this listener answers OTA_STARTED by setting
+    # ota_active and then the cover's normal STOP, so stop_action runs exactly as
+    # if the user had pressed STOP. OTA_ERROR / OTA_ABORT clear ota_active.
     # Registered once at boot; the callback object is created on first use.
     - priority: 900
       then:
@@ -241,9 +252,15 @@ esphome:
             struct StopOnUpdate : public ota::OTAGlobalStateListener {
               void on_ota_global_state(ota::OTAState state, float progress, uint8_t error,
                                        ota::OTAComponent *component) override {
-                if (state != ota::OTA_STARTED) return;
-                ESP_LOGI("update", "Firmware update starting - stopping the motor");
-                id(glasscalibur_cover).make_call().set_command_stop().perform();
+                if (state == ota::OTA_STARTED) {
+                  id(ota_active) = true;
+                  ESP_LOGI("update", "Firmware update starting - stopping the motor; moves refused until it ends");
+                  id(glasscalibur_cover).make_call().set_command_stop().perform();
+                } else if (state == ota::OTA_ERROR || state == ota::OTA_ABORT) {
+                  if (id(ota_active))
+                    ESP_LOGW("update", "Firmware update failed - moves allowed again");
+                  id(ota_active) = false;
+                }
               }
             };
             static StopOnUpdate stop_on_update;
