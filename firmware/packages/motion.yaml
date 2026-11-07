@@ -30,16 +30,36 @@ globals:
     initial_value: '0'
 
   # Last known stepper position in steps. Persisted so the cover entity
-  # survives reboots without re-homing. Saved at IDLE transitions (stop_action,
-  # on_stall, natural target arrival), refreshed by the 200 ms poll while moving
-  # (as the Ropener does), and captured from the driver at shutdown (on_shutdown
-  # below). It used to be saved at IDLE transitions only, so a reboot mid-travel
-  # restored the position the travel STARTED from. RAM-only per tick: ESPHome
-  # flushes changed globals to flash at most once a minute, and at shutdown.
+  # survives reboots without re-homing. Written to flash at once at every stop
+  # (position_commit), refreshed in RAM only by the 200 ms poll while moving, and
+  # captured from the driver at shutdown (on_shutdown below).
   - id: global_current_position
     type: int
     restore_value: yes
     initial_value: '0'
+
+  # Move-in-progress marker: set and flushed before motion starts (move_begin),
+  # cleared and flushed at the stop (position_commit). Still set at boot = the
+  # last move was cut off (power cut or unplanned restart): its position is lost.
+  - id: move_marker
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+
+  # The position is unknown (cover shows 50 %, Fault bit 8) until S5 or S4 is
+  # pressed: after an interrupted move, a saved end whose switch isn't pressed,
+  # or a close that ended without S5. Persisted until a switch settles it.
+  - id: pos_unknown
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+
+  # A set position asked for while the position was unknown: the unit closes to
+  # S5 first, then goes there (the S5 handler). -1 = none.
+  - id: pending_pos
+    type: float
+    restore_value: no
+    initial_value: '-1.0'
 
   # Timestamp (millis()) at which the current motion command started. Used by
   # the vib-stall check to skip its first ~500 ms after launch — initial motor
@@ -71,11 +91,14 @@ esphome:
   # reverse setup-priority order, so at priority 600 this runs before the
   # globals store their values (800) and before the preference syncer flushes
   # them to flash (1000) — the saved position is the stop point, not the start
-  # of the travel. A power cut skips shutdown; the 200 ms refresh covers that.
+  # of the travel, so the move-in-progress marker is cleared too. A power cut or
+  # an unplanned restart skips shutdown: the marker then stays set (see on_boot).
   on_shutdown:
     - priority: 600
       then:
-        - lambda: 'id(global_current_position) = id(driver)->current_position;'
+        - lambda: |-
+            id(global_current_position) = id(driver)->current_position;
+            id(move_marker) = false;
   on_boot:
     # BEFORE core configures the driver (core boots at priority 600): clamp the
     # restored motor current. Units upgraded from firmware that allowed irun up to
@@ -92,6 +115,12 @@ esphome:
     # after core's configure is equivalent to the pre-rewire single-trigger boot.)
     - priority: 500
       then:
+        # The last move was cut off: its saved position is stale.
+        - lambda: |-
+            if (id(move_marker)) {
+              id(pos_unknown) = true;
+              ESP_LOGW("limit", "The last move was interrupted (power cut or restart) - position unknown");
+            }
         - stepper.report_position:
             id: driver
             position: !lambda "return id(global_current_position);"
@@ -162,6 +191,39 @@ esphome:
         - stepper.set_speed:
             id: driver
             speed: !lambda "return ${effective_speed};"
+        # The switches decide the ends. Checked 500 ms in, after the switch debounce
+        # has settled: a saved end whose switch isn't pressed is unknown; a pressed
+        # switch is the truth.
+        - delay: 500ms
+        - lambda: |-
+            const int32_t saved = id(global_current_position);
+            const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                            : (int32_t) (${open_default_mm} * ${steps_per_mm});
+            const bool s4 = id(limit_switch_1).state, s5 = id(limit_switch_2).state;
+            if (!s5 && saved <= 0) {
+              id(pos_unknown) = true;
+              ESP_LOGW("limit", "Saved as closed but S5 is not pressed - position unknown");
+            }
+            if (!s4 && saved >= stroke) {
+              id(pos_unknown) = true;
+              ESP_LOGW("limit", "Saved as fully open but S4 is not pressed - position unknown");
+            }
+            if (s5) {
+              id(driver)->report_position(0);
+              id(driver)->set_target(0);
+              id(homed_fresh) = true;
+              id(pos_unknown) = false;
+            } else if (s4) {
+              id(driver)->report_position(stroke);
+              id(driver)->set_target(stroke);
+              id(pos_unknown) = false;
+            }
+            if (id(pos_unknown)) {
+              id(limit_faults) |= 8;
+              ESP_LOGW("limit", "Position unknown: the next Close runs until S5, the next Open until S4");
+            }
+        - script.execute: position_commit
+        - component.update: limit_fault_text
 
 # -----------------------------------------------------------------------------
 # The cover entity (Home Assistant)
@@ -189,12 +251,18 @@ cover:
       sorting_weight: 1
       sorting_group_id: group_control
     has_position: true
-    # 1.0 = the learned open switch position (open_default_mm before learning).
+    # The switches decide the ends: 0 % (closed) only while S5 is pressed, 100 %
+    # (fully open) only while S4 is pressed, 50 % while the position is unknown;
+    # otherwise the count over the learned stroke (open_default_mm before
+    # learning), kept within 1-99 %.
     lambda: |-
+      if (id(pos_unknown)) return 0.5f;
+      if (id(limit_switch_2).state) return 0.0f;
+      if (id(limit_switch_1).state) return 1.0f;
       const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
                                                       : (int32_t) (${open_default_mm} * ${steps_per_mm});
       float p = float(id(driver)->current_position) / float(stroke);
-      return p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
+      return p < 0.01f ? 0.01f : (p > 0.99f ? 0.99f : p);
 
     # stop_action is the USER's STOP: web UI, Home Assistant, the API, Button 1
     # and the stop-on-update listener. It is never thermally gated. It halts at
@@ -203,6 +271,7 @@ cover:
     # call motion_halt directly, so they never end a calibration by accident.
     stop_action:
       - logger.log: "COVER stop_action"
+      - lambda: 'id(pending_pos) = -1.0f;'    # STOP also drops a pending set position
       - script.execute: motion_halt
       - script.execute: thermal_cancel_pending
       - if:
@@ -292,45 +361,57 @@ cover:
                       then:
                         - script.execute: drive_close
                       else:
-                        - lambda: |-
-                            id(motion_start_ms) = millis();
-                            id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
-                            id(sg_fired_this_move) = false;
-                            id(stall_release_active) = false; // a new move gets its own stall release
-                            id(homed_fresh) = false;          // any motion ends a fresh home
-                            id(learn_this_open) = false;
-                            id(open_to_end) = false;
-                            id(close_to_end) = false;
-                        # Direction is inferred by comparing the new target to current_position.
                         - if:
                             condition:
-                              lambda: |-
-                                const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
-                                                                                : (int32_t) (${open_default_mm} * ${steps_per_mm});
-                                return (int32_t) (pos * stroke) >= id(driver)->current_position;
+                              lambda: 'return id(pos_unknown);'
                             then:
-                              - globals.set:
-                                  id: global_state
-                                  value: "1"
-                              - cover.template.publish:
-                                  id: glasscalibur_cover
-                                  current_operation: OPENING
+                              # Position unknown: close to S5 first, then go there (the S5
+                              # handler runs the pending target).
+                              - script.execute: drive_close
+                              - lambda: |-
+                                  id(pending_pos) = pos;
+                                  ESP_LOGI("limit", "Position unknown: closing to S5 first, then to %.0f %%", pos * 100.0f);
                             else:
-                              - globals.set:
-                                  id: global_state
-                                  value: "2"
-                              - cover.template.publish:
-                                  id: glasscalibur_cover
-                                  current_operation: CLOSING
-                        - stepper.set_speed:
-                            id: driver
-                            speed: !lambda "return ${effective_speed};"
-                        - stepper.set_target:
-                            id: driver
-                            target: !lambda |-
-                              const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
-                                                                              : (int32_t) (${open_default_mm} * ${steps_per_mm});
-                              return (int32_t) (pos * stroke);
+                              - lambda: |-
+                                  id(motion_start_ms) = millis();
+                                  id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
+                                  id(sg_fired_this_move) = false;
+                                  id(stall_release_active) = false; // a new move gets its own stall release
+                                  id(homed_fresh) = false;          // any motion ends a fresh home
+                                  id(learn_this_open) = false;
+                                  id(open_to_end) = false;
+                                  id(close_to_end) = false;
+                              # Direction is inferred by comparing the new target to current_position.
+                              - if:
+                                  condition:
+                                    lambda: |-
+                                      const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                                      : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                                      return (int32_t) (pos * stroke) >= id(driver)->current_position;
+                                  then:
+                                    - globals.set:
+                                        id: global_state
+                                        value: "1"
+                                    - cover.template.publish:
+                                        id: glasscalibur_cover
+                                        current_operation: OPENING
+                                  else:
+                                    - globals.set:
+                                        id: global_state
+                                        value: "2"
+                                    - cover.template.publish:
+                                        id: glasscalibur_cover
+                                        current_operation: CLOSING
+                              - stepper.set_speed:
+                                  id: driver
+                                  speed: !lambda "return ${effective_speed};"
+                              - script.execute: move_begin
+                              - stepper.set_target:
+                                  id: driver
+                                  target: !lambda |-
+                                    const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                                                    : (int32_t) (${open_default_mm} * ${steps_per_mm});
+                                    return (int32_t) (pos * stroke);
 
 # -----------------------------------------------------------------------------
 # Tunable number entities
@@ -536,9 +617,7 @@ script:
       - cover.template.publish:
           id: glasscalibur_cover
           current_operation: IDLE
-      - globals.set:
-          id: global_current_position
-          value: !lambda "return id(driver)->current_position;"
+      - script.execute: position_commit      # the stop point reaches flash at once
 
   # The motion half of the cover's open / close actions. Those call these after
   # their calibration check; calibration calls them directly.
@@ -552,11 +631,15 @@ script:
           id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
           id(sg_fired_this_move) = false;
           id(stall_release_active) = false; // a new move gets its own stall release
-          id(learn_this_open) = id(homed_fresh);
+          id(learn_this_open) = id(homed_fresh) && !id(pos_unknown);
           id(homed_fresh) = false;
           id(open_to_end) = true;
           id(close_to_end) = false;
+          id(pending_pos) = -1.0f;          // a new Open replaces a pending set position
           const float spm = ${steps_per_mm};
+          if (id(pos_unknown))
+            ESP_LOGW("limit", "Position unknown: opening until S4 (at most the stroke + %.1f mm)",
+                     ${seek_margin_mm});
           const int32_t learned = id(open_stroke_steps);
           if (learned > 0) {
             ESP_LOGI("limit", "Open stroke %.2f mm (learned); open target %.2f mm%s",
@@ -574,9 +657,15 @@ script:
       - stepper.set_speed:
           id: driver
           speed: !lambda "return ${effective_speed};"
+      - script.execute: move_begin
       - stepper.set_target:
           id: driver
           target: !lambda |-
+            const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                            : (int32_t) (${open_default_mm} * ${steps_per_mm});
+            // Position unknown: until S4, at most a full stroke + seek_margin_mm from here.
+            if (id(pos_unknown))
+              return id(driver)->current_position + stroke + (int32_t) (${seek_margin_mm} * ${steps_per_mm});
             return id(open_stroke_steps) > 0
                 ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
                 : (int32_t) (${open_default_mm} * ${steps_per_mm});
@@ -584,7 +673,9 @@ script:
           id: glasscalibur_cover
           current_operation: OPENING
   # Close: at most close_overtravel_mm past the S5 zero — the close switch stops
-  # it first; arriving there with it released is a fault (interval poll).
+  # it first; arriving there with it released is a fault (interval poll) and
+  # makes the position unknown. While the position is unknown, the close runs
+  # until S5: at most a full stroke + seek_margin_mm from here, stall detection on.
   - id: drive_close
     then:
       - lambda: |-
@@ -596,18 +687,49 @@ script:
           id(learn_this_open) = false;
           id(open_to_end) = false;
           id(close_to_end) = true;
+          id(pending_pos) = -1.0f;          // a new Close replaces a pending set position
+          if (id(pos_unknown))
+            ESP_LOGW("limit", "Position unknown: closing until S5 (at most the stroke + %.1f mm)",
+                     ${seek_margin_mm});
       - globals.set:
           id: global_state
           value: "2"
       - stepper.set_speed:
           id: driver
           speed: !lambda "return ${effective_speed};"
+      - script.execute: move_begin
       - stepper.set_target:
           id: driver
-          target: !lambda "return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});"
+          target: !lambda |-
+            if (id(pos_unknown)) {
+              const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
+                                                              : (int32_t) (${open_default_mm} * ${steps_per_mm});
+              return id(driver)->current_position - stroke - (int32_t) (${seek_margin_mm} * ${steps_per_mm});
+            }
+            return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});
       - cover.template.publish:
           id: glasscalibur_cover
           current_operation: CLOSING
+
+  # Saving the position (option A): the move-in-progress marker goes to flash
+  # before motion starts, and the stop point (with the marker cleared) at every
+  # stop. Nothing is written to flash while the motor moves; the 200 ms poll only
+  # refreshes the RAM copy. About 3 small writes per move.
+  - id: move_begin
+    then:
+      - lambda: |-
+          id(move_marker) = true;
+          move_marker->update();
+          global_preferences->sync();
+  - id: position_commit
+    then:
+      - lambda: |-
+          id(global_current_position) = id(driver)->current_position;
+          id(move_marker) = false;
+          global_current_position->update();
+          move_marker->update();
+          pos_unknown->update();
+          global_preferences->sync();
 
 # -----------------------------------------------------------------------------
 # Motion-completion poll
@@ -633,8 +755,10 @@ script:
 interval:
   - interval: 200ms
     then:
-      # Keep the saved position current while moving, so a reboot or power cut
-      # mid-travel restores (close to) where the motor stopped.
+      # Keep the RAM copy of the position current while moving. It reaches flash
+      # only at the stop (position_commit) or a planned reboot (on_shutdown): a
+      # power cut or an unplanned restart mid-move loses it, and the
+      # move-in-progress marker then makes the position unknown at boot.
       - lambda: |-
           int s = id(global_state);
           if (s == 1 || s == 2) id(global_current_position) = id(driver)->current_position;
@@ -647,7 +771,9 @@ interval:
           then:
             # An end-of-travel move that reached its target without its switch:
             # the motor has already stopped there. Raise the fault; no re-zero.
-            # Closing / opening stay allowed. Calibration is left alone: its leg
+            # A close that ends without S5 doesn't report closed: the position is
+            # unknown (the next Close runs until S5). An open that ends without S4
+            # shows 99 % and doesn't seek S4. Calibration is left alone: its leg
             # treats "count arrived, no switch" as step loss and escalates.
             - lambda: |-
                 if (id(cal_active)) return;
@@ -659,9 +785,15 @@ interval:
                            "(%d steps, %.2f mm); position not re-zeroed", (int) pos, pos / spm);
                 }
                 if (id(global_state) == 2 && id(close_to_end) && !id(limit_switch_2).state) {
-                  id(limit_faults) |= 4;
-                  ESP_LOGW("limit", "FAULT: close limit switch not detected - stopped %.1f mm past zero "
-                           "(%d steps)", ${close_overtravel_mm}, (int) pos);
+                  id(limit_faults) |= 4 | 8;
+                  ESP_LOGW("limit", "FAULT: close limit switch not detected - stopped at the close target "
+                           "(%d steps); position unknown", (int) pos);
+                  id(pos_unknown) = true;
+                  if (id(pending_pos) >= 0.0f) {
+                    ESP_LOGW("limit", "Pending set position %.0f %% dropped - S5 not reached",
+                             id(pending_pos) * 100.0f);
+                    id(pending_pos) = -1.0f;
+                  }
                 }
             - lambda: |-
                 id(open_to_end) = false;
@@ -677,6 +809,4 @@ interval:
             - cover.template.publish:
                 id: glasscalibur_cover
                 current_operation: IDLE
-            - globals.set:
-                id: global_current_position
-                value: !lambda "return id(driver)->current_position;"
+            - script.execute: position_commit   # the stop point reaches flash at once

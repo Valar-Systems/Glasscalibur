@@ -11,6 +11,7 @@ globals:
   #   bit 0 (1) open switch position out of range   cleared by an accepted learning
   #   bit 1 (2) open limit switch not detected      cleared by the next S4 press
   #   bit 2 (4) close limit switch not detected     cleared by the next S5 press
+  #   bit 3 (8) position unknown - close or open fully   cleared by an S5 or S4 press
   - id: limit_faults
     type: int
     restore_value: no
@@ -35,4 +36,5 @@ text_sensor:
       if (f & 1) s += "open switch position out of range";
       if (f & 2) { if (!s.empty()) s += "; "; s += "open limit switch not detected"; }
       if (f & 4) { if (!s.empty()) s += "; "; s += "close limit switch not detected"; }
+      if (f & 8) { if (!s.empty()) s += "; "; s += "position unknown - close or open fully"; }
       return {s};

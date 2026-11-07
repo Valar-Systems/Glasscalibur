@@ -4,7 +4,7 @@ Nothing here is ever built by CI, released, or flashed to a customer unit.
 
 | File | What it is |
 | --- | --- |
-| `glasscalibur-bench.yaml` | The product plus "BENCH: simulate stall" (StallGuard doesn't fire on cue) and "BENCH: open switch (S4) dead" / "BENCH: close switch (S5) dead" (the switches are soldered, so L3 / L4 simulate a dead one: the sensor reads released, as a broken switch does with the board's pull-up). |
+| `glasscalibur-bench.yaml` | The product plus "BENCH: simulate stall" (StallGuard doesn't fire on cue) and "BENCH: open switch (S4) dead" / "BENCH: close switch (S5) dead" (the switches are soldered, so L3 / L4 simulate a dead one: the sensor reads released, as a broken switch does with the board's pull-up), and "BENCH: close switch (S5) dead, kept across restarts" (2.3.0 bench PC4). |
 | `glasscalibur-tp1.yaml` | The TP-1 test build: the bench build plus `tp1-bench.yaml`. Reports Firmware Version `dev-tp1`. |
 | `tp1-bench.yaml` | The TP-1 test package: a motion backstop at 62 °C, the fallback hold-current heater with its own cutoffs, buttons that fire the schedule scripts, and a button that runs the product's lockout routine. |
 | `tp1_run.py` | Runs TP-1 end to end over the native API and REST and writes a PASS/FAIL report. |
