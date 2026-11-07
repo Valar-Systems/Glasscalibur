@@ -40,6 +40,14 @@ switch:
     entity_category: CONFIG
     optimistic: true
     restore_mode: ALWAYS_OFF
+  # The same, kept across a restart (2.3.0 bench PC4: a unit saved as closed that
+  # boots with S5 reading released). Turn it off afterwards.
+  - platform: template
+    name: "BENCH: close switch (S5) dead, kept across restarts"
+    id: bench_s5_dead_kept
+    entity_category: CONFIG
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
 
 binary_sensor:
   - id: !extend limit_switch_1
@@ -47,4 +55,4 @@ binary_sensor:
       - lambda: 'if (id(bench_s4_dead).state) return false; return x;'
   - id: !extend limit_switch_2
     filters:
-      - lambda: 'if (id(bench_s5_dead).state) return false; return x;'
+      - lambda: 'if (id(bench_s5_dead).state || id(bench_s5_dead_kept).state) return false; return x;'

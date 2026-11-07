@@ -137,8 +137,31 @@ Distances are counted from the close switch trigger (position 0) at 3066.7 steps
 - **Closes** may run **0.6 mm** past zero; the close switch stops them first.
 - The cover's 0–100 % is scaled to the learned stroke. Set‑position 100 % and 0 % run
   the full open and close.
+- **The switches decide the ends.** The cover shows 0 % (closed) only while the close
+  switch is pressed and 100 % (fully open) only while the open switch is pressed;
+  otherwise it stays within 1–99 %. An open that ends without the open switch shows
+  99 % with its fault and doesn't seek the switch.
 - When an open is not a learning open, the open switch re‑syncs the position to the
   learned stroke (101.0 mm before learning), correcting any drift.
+
+## Position after a power cut
+
+The position is written to flash at once at every stop, and a "move in progress" marker
+is written before each move starts and cleared at its stop; nothing is written while
+the motor moves. A planned restart (Restart, an update) saves the exact stop point.
+
+The position is **unknown** when, at startup, the marker is still set (the last move was
+cut off by a power cut or an unplanned restart), or the position was saved at an end
+whose switch isn't pressed; and after a close that ends without the close switch. While
+it is unknown:
+
+- the cover shows **50 %**, and **Fault** shows *position unknown - close or open fully*;
+- the next **Close** runs until the close switch (at most a full stroke + 2 mm from
+  where it starts, with stall detection on), and the next **Open** until the open
+  switch (it doesn't learn the stroke);
+- **Set position** closes to the close switch first, then goes to the requested position
+  (both logged);
+- a press of either switch makes the position known again.
 
 ## Faults and what to do
 
@@ -148,8 +171,9 @@ warning. A restart clears them.
 | Fault | Means | What to do |
 | --- | --- | --- |
 | **open switch position out of range** | A learning open met the open switch outside 94.0–101.0 mm. The previous value is kept. | Check that the open switch and the carriage are seated, then close fully and open again to re‑learn. |
-| **open limit switch not detected** | An open reached its target without the open switch. It stopped there; the position is not re‑zeroed. Closing still works. | Check the open switch and its wiring. Close fully and open again. After updating from an earlier version this can happen once (old position scale): one full close fixes it. |
-| **close limit switch not detected** | A close ran 0.6 mm past zero without the close switch. It stopped. | Check the close switch and its wiring. Open fully (the open switch re‑syncs the position), then close. |
+| **open limit switch not detected** | An open reached its target without the open switch. It stopped there and shows 99 %; the position is not re‑zeroed. Closing still works. | Check the open switch and its wiring. Close fully and open again. After updating from an earlier version this can happen once (old position scale): one full close fixes it. |
+| **close limit switch not detected** | A close reached its target without the close switch. It stopped; the position is now unknown. | Check the close switch and its wiring. The next Close runs until the close switch. |
+| **position unknown - close or open fully** | A move was cut off by a power cut or an unplanned restart, a saved end's switch isn't pressed, or a close ended without the close switch. The cover shows 50 %. | Close (or open) fully: the next Close runs until the close switch, the next Open until the open switch. |
 
 Other things you may see:
 
@@ -213,7 +237,7 @@ categories.
 | Entity | Type | Notes |
 | --- | --- | --- |
 | Calibration Notice | text | *Not calibrated - run Calibrate* / *Calibrated* |
-| Glasscalibur | cover | open / close / stop / position (0 closed … 1 open) |
+| Glasscalibur | cover | open / close / stop / position (0 only while the close switch is pressed … 1 only while the open switch is pressed; 50 % when unknown) |
 | State | text | IDLE, OPENING, CLOSING, TAMPERED |
 | Button 1 | binary sensor | the unit's button |
 | Child Lock | switch (config) | the unit's button ignores presses; remote control keeps working |
@@ -272,7 +296,7 @@ categories.
 
 | Entity | Type | Notes |
 | --- | --- | --- |
-| Fault | text (diagnostic) | limit-switch faults, or `None` |
+| Fault | text (diagnostic) | limit-switch faults and *position unknown*, or `None` |
 | Open Limit Switch | binary sensor | S4 |
 | Close Limit Switch | binary sensor | S5 |
 | Firmware Version | text (diagnostic) | release version, or `dev` |
