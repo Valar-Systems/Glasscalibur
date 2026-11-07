@@ -193,3 +193,9 @@ M2 `find_unit.py`: given a neighbour table with two units, it returns only the a
    whose device reports the requested MAC. Sabotage: a requested MAC that no device
    reports returns nothing (exit 1). Tested offline with a fake table and fake devices,
    none of it committed.
+
+## Amendment 4 — TP-1 needs a learned stroke (review, 2026-11-07; appended before the code)
+
+TP-1 does not start unless L1 learned the stroke: before its first command `tp1_run.py`
+requires **Open stroke** between 94.0 and 101.0 mm, and stops otherwise. Checked as O3 in
+`2026-11-bench-open-guard.md`.
