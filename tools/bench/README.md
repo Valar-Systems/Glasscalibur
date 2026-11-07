@@ -4,24 +4,33 @@ Nothing here is ever built by CI, released, or flashed to a customer unit.
 
 | File | What it is |
 | --- | --- |
-| `glasscalibur-bench.yaml` | The product plus "BENCH: simulate stall" (StallGuard doesn't fire on cue). |
+| `glasscalibur-bench.yaml` | The product plus "BENCH: simulate stall" (StallGuard doesn't fire on cue) and "BENCH: open switch (S4) dead" / "BENCH: close switch (S5) dead" (the switches are soldered, so L3 / L4 simulate a dead one: the sensor reads released, as a broken switch does with the board's pull-up). |
 | `glasscalibur-tp1.yaml` | The TP-1 test build: the bench build plus `tp1-bench.yaml`. Reports Firmware Version `dev-tp1`. |
 | `tp1-bench.yaml` | The TP-1 test package: a motion backstop at 62 °C, the fallback hold-current heater with its own cutoffs, buttons that fire the schedule scripts, and a button that runs the product's lockout routine. |
 | `tp1_run.py` | Runs TP-1 end to end over the native API and REST and writes a PASS/FAIL report. |
 | `tp1_sim.py` | A simulated unit for the script's dry run (`--sim`). |
+| `find_unit.py` | Finds the bench unit's current address by its MAC, confirmed by the unit itself. |
 
 The design and the expected results are in
 [`../regression-gate/predictions/2026-11-tp1-automatic.md`](../regression-gate/predictions/2026-11-tp1-automatic.md).
+
+## Finding the unit
+
+Its address can change, and no other unit on the network may get bench commands, so find it
+by the MAC the USB flash reported: `python tools/bench/find_unit.py --mac <MAC>`. It accepts
+an address only if the device there reports that MAC, and prints it on screen only.
 
 ## Running TP-1
 
 1. Flash the test build: `esphome run tools/bench/glasscalibur-tp1.yaml`.
 2. Run the script, from the ESPHome environment (it uses `aioesphomeapi`):
-   `python tools/bench/tp1_run.py --host <unit address>`.
+   `python tools/bench/tp1_run.py --host <unit address> --mac <MAC>`. Before its first
+   command it checks that the unit reports that MAC, and stops if not.
    It saves the settings it changes (Speed, Motor Current, the calibration), heats the
    motor with full strokes at Slow and 600 mA, runs the checks, and puts the settings back.
    It asks for one Button 1 press during the lockout. The report and the device log go to
-   `tools/bench/out/<time>/` (not committed). The unit address is not written to the report.
+   `tools/bench/out/<time>/` (not committed). Neither the address nor the MAC is written to
+   them; the kept device log has addresses, MACs and name suffixes masked.
 3. Flash the bench build back and check **Firmware Version**.
 
 Dry run without a unit: `python tools/bench/tp1_run.py --sim`
