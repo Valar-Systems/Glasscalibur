@@ -245,3 +245,19 @@ listener doesn't set `ota_active` fails; the base fails R3.
   adapter plugs into it, so the cut is on the mains side and the unit runs a moment longer
   while the adapter drains. Each test is judged by where the unit actually stopped (the
   recovery Close's logged travel to S5), not by when the plug switched. USB stays unplugged.
+
+### Amendment 2, note (appended before the code, after reading the move paths)
+
+- Every move a user, Button 1, a schedule or a cooled thermal-pending move starts goes
+  through the cover's open / close / position actions; calibration starts only through
+  `auto_calibrate`, and its own legs (drive_open / drive_close) are ended by the update's
+  STOP (cal_abort). So the refusal sits in those three actions and at the top of
+  auto_calibrate's preconditions; nothing else starts motion.
+- A command refused for an update also cancels a thermal-pending scheduled move, as a
+  thermally refused one does (#22: the newest command wins). R3 adds: the update refusal
+  branch runs `thermal_cancel_pending`.
+- Verified in the source: `TMC2209Stepper::stop()` writes VACTUAL 0 through `write_field`,
+  which sends the 8 bytes, reads their one-wire echo back and flushes the UART, so the halt
+  has gone out when `stop()` returns. ESPHome OTA, the GitHub update and the web-page upload
+  all report OTA_STARTED, and OTA_ERROR (or OTA_ABORT for the upload) when they fail; a
+  completed update reports OTA_COMPLETED and restarts, so `ota_active` is not cleared then.
