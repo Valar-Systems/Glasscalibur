@@ -7,12 +7,20 @@ lines the firmware writes. Faults for the B4 sabotages:
   --sim-fault refused-close-no-cancel  a refused Close leaves the pending scheduled move
 Profile (not a fault): --sim-fault slow-heat  Slow strokes peak below 60 °C (exercises the
 heater fallback). The default profile follows Daniel's bench note: about four strokes to 60.
+
+Geometry (old carriage): distances in mm from the S5 trigger; S4 trips at 95.5, the hard stop
+is at 99.1 (recorded as a hard-stop hit). The default unit has learned a 95.5 mm stroke.
+Open-guard profiles: fresh (not learned, booted on S5), fresh-s4-never (S4 never trips),
+fresh-unreferenced (not learned, carriage really 30 mm out while the firmware believes 0),
+fresh-unreferenced-near (the same, 0.4 mm out: a close then ends on S5).
 """
 import math
 
 AMBIENT, TAU_S, LAG_S = 22.0, 2400.0, 30.0
 K_MOVE, K_HEAT = 0.050, 0.012          # °C/s at 600 mA moving / at IHOLD 19 standing
-STROKE_STEPS, BACKOFF_STEPS = 310_000, 24_500
+SPM = 3066.6667                         # steps per mm
+BACKOFF_MM = 24_500 / SPM
+S4_MM, HARD_MM, DEFAULT_MM = 95.5, 99.1, 101.0
 SPEEDS = {"Slow": 1200, "Medium": 2600, "Fast": 5500}
 
 
@@ -25,7 +33,15 @@ class SimDevice:
         self.logs, self.events, self.seen = [], [], {}
         self.core = self.sens = 30.0
         self.reading, self.next_read, self.next_bench = 30.0, 0.0, 0.0
-        self.pos, self.target, self.state = 0.3, None, "IDLE"
+        f = str(fault or "")
+        fresh = f.startswith("fresh")
+        self.stroke = None if fresh else S4_MM                  # learned Open stroke (mm)
+        self.s4_mm = None if "s4-never" in f else S4_MM
+        self.believed = 0.0 if fresh else 0.3 * S4_MM           # the firmware's position (mm)
+        self.offset = {"fresh-unreferenced": 30.0, "fresh-unreferenced-near": 0.4}.get(f, 0.0)  # actual - believed
+        self.learning = fresh and self.offset == 0.0            # booted on S5: next open learns
+        self.hard_hit = False
+        self.target, self.state = None, "IDLE"
         self.stall_release = False
         self.speed, self.cal_speed, self.calibrated = "Medium", "Medium", True
         self.current, self.cal_status = 450.0, "OK: irun=14 SGTHRS=31"
@@ -56,6 +72,25 @@ class SimDevice:
     def last_seen(self, name):
         return self.seen.get(name, -1e9)
 
+    @property
+    def actual(self):
+        return self.believed + self.offset
+
+    @property
+    def scale(self):
+        return self.stroke if self.stroke else DEFAULT_MM
+
+    @property
+    def pos(self):
+        return min(1.0, max(0.0, self.believed / self.scale))
+
+    def target_mm(self, cmd, pos=None):
+        if cmd == "open":
+            return self.stroke + 0.5 if self.stroke else DEFAULT_MM
+        if cmd == "close":
+            return -0.6
+        return pos * self.scale
+
     def get(self, name):
         lock_text = ("Not locked" if self.calibrated and self.cal_speed == self.speed else
                      ("Speed locked to Fast until calibration has run" if not self.calibrated else
@@ -69,7 +104,10 @@ class SimDevice:
                 "Motor Current": self.current, "Calibration Status": self.cal_status,
                 "StallGuard calibrated": self.calibrated, "Firmware Version": "dev-tp1",
                 "StallGuard Enabled": True, "Vibration Stall Detection": True, "Child Lock": False,
-                "BENCH heater": self.heat_on, "BENCH heater status": hs, **self.vals}.get(name)
+                "BENCH heater": self.heat_on, "BENCH heater status": hs,
+                "Open stroke": self.stroke if self.stroke else float("nan"),
+                "Open Limit Switch": self.s4_mm is not None and self.actual >= self.s4_mm,
+                "Close Limit Switch": self.actual <= 0.0, **self.vals}.get(name)
 
     async def cover(self, path, cmd, pos=None):
         self.commands.append(("cover", cmd))
@@ -87,7 +125,7 @@ class SimDevice:
             return 200
         self.cancel_pending()
         self.log(f"[D][main]: COVER {cmd if cmd != 'set' else 'position'}_action")
-        self.move_to({"open": 1.0, "close": 0.0}.get(cmd, pos))
+        self.move_to(self.target_mm(cmd, pos))
         return 200
 
     async def press(self, name):
@@ -102,11 +140,10 @@ class SimDevice:
         elif name == "BENCH: simulate stall":
             if self.state in ("OPENING", "CLOSING"):
                 self.log("[I][main]: BENCH: simulated stall")
-                back = BACKOFF_STEPS / STROKE_STEPS
-                tgt = self.pos + back if self.state == "CLOSING" else self.pos - back
+                tgt = self.believed + BACKOFF_MM if self.state == "CLOSING" else self.believed - BACKOFF_MM
                 self.stall_release = True
-                self.target = min(1.0, max(0.0, tgt))
-                self.state = "OPENING" if self.target > self.pos else "CLOSING"
+                self.target = min(self.scale, max(0.0, tgt))
+                self.state = "OPENING" if self.target > self.believed else "CLOSING"
                 self.event("Obstruction", "obstructed")
         elif name == "Auto-Calibrate":
             if self.state != "IDLE" or self.cal_until:
@@ -175,13 +212,13 @@ class SimDevice:
         else:
             self.log(f"[I][main]: Schedule: {'opening' if which == 1 else 'closing'} cover")
             self.cancel_pending()
-            self.move_to(1.0 if which == 1 else 0.0)
+            self.move_to(self.target_mm("open" if which == 1 else "close"))
 
     def move_to(self, tgt):
-        if abs(tgt - self.pos) < 1e-6:
+        if abs(tgt - self.believed) < 1e-6:
             return
         self.target, self.stall_release = tgt, False
-        self.state = "OPENING" if tgt > self.pos else "CLOSING"
+        self.state = "OPENING" if tgt > self.believed else "CLOSING"
 
     def halt(self):
         self.target, self.state, self.stall_release = None, "IDLE", False
@@ -226,10 +263,26 @@ class SimDevice:
         moving = self.state in ("OPENING", "CLOSING")
         if moving:
             sp = SPEEDS[self.cal_speed if self.calibrated else "Fast"]
-            step = sp / STROKE_STEPS * dt * (1 if self.state == "OPENING" else -1)
-            self.pos += step
-            if (step > 0 and self.pos >= self.target) or (step < 0 and self.pos <= self.target):
-                self.pos = self.target
+            step = sp / SPM * dt * (1 if self.state == "OPENING" else -1)
+            self.believed += step
+            if self.actual >= HARD_MM:                               # the carriage meets the stop
+                self.believed = HARD_MM - self.offset
+                self.hard_hit = True
+                self.log(f"[E][sim]: HARD STOP HIT at {HARD_MM} mm")
+                self.halt()
+            elif step > 0 and self.s4_mm is not None and self.actual >= self.s4_mm:
+                self.halt()                                          # stops on S4
+                if self.learning and 94.0 <= self.believed <= 101.0:
+                    self.stroke = round(self.believed, 2)
+                    self.log(f"[I][limit]: Open stroke learned: {self.stroke:.2f} mm")
+                self.learning = False
+                self.believed = self.stroke if self.stroke else DEFAULT_MM   # re-sync on S4
+                self.offset = self.s4_mm - self.believed
+            elif step < 0 and self.actual <= 0.0:
+                self.halt()                                          # stops on S5: a fresh home
+                self.believed, self.offset, self.learning = 0.0, 0.0, True
+            elif (step > 0 and self.believed >= self.target) or (step < 0 and self.believed <= self.target):
+                self.believed = self.target
                 self.halt()
         heat = (self.k_move * (self.current / 600.0) ** 2 if moving else 0.0) + \
                (K_HEAT * (self.ihold / 19.0) ** 2 if self.heat_on and not moving else 0.0)

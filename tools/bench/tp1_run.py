@@ -349,6 +349,10 @@ class Run:
         fw = self.dev.get(E_FW)
         if not self.check("test build running (Firmware Version dev-tp1)", fw == "dev-tp1", str(fw)):
             return False
+        stroke = self.dev.get("Open stroke")
+        if not self.check("L1 has learned the stroke (Open stroke 94.0-101.0 mm)",
+                          stroke is not None and stroke == stroke and 94.0 <= stroke <= 101.0, str(stroke)):
+            return False
         if self.dev.get(E_LOCKOUT):
             self.rec("Thermal Lockout already on at the start", "FAIL")
             return False
@@ -486,6 +490,8 @@ class Run:
         await self.stop()
 
     async def restore(self):
+        if not self.snapshot:                 # the run stopped before it changed anything
+            return
         await self.wait(lambda: (self.T() or 99) < WARN, 60 * 60, poll=2)
         s = self.snapshot
         changed_speed = self.dev.get(E_SPEED) != s[E_SPEED]
