@@ -90,3 +90,11 @@ G2 Behaviour gate: CHANGED exactly `esphome:on_boot :: 500.0`,
   Slow -> moves at Slow, Speed Lock "Not locked", no STALE; survives a reboot. A unit
   calibrated on older firmware: after the update the log names its saved speed as the
   calibrated speed and it runs at its setting.
+
+## Note, 2026-11-06 (appended before the bench; nothing above was edited)
+
+F5's last sentence ("A unit calibrated on older firmware: after the update the log names
+its saved speed as the calibrated speed and it runs at its setting") is out of date: #12
+(`2026-11-recorded-cal-speed.md`) made such a unit run at the speed its calibration
+recorded, not its setting. On the bench, F5 runs without that sentence and F6 covers the
+older-firmware case.
