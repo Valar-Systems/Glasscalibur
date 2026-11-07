@@ -71,6 +71,8 @@ substitutions:
   close_overtravel_mm:   "0.6"     # a close may run this far past zero; the carriage
                                    #   meets the front plate ≥ 0.7 mm past S5
   coast_limit_mm:        "0.3"     # S4 stop coast above this is logged as a WARN
+  seek_margin_mm:        "2.0"     # position unknown: a Close / Open seeks its switch for at most
+                                   #   a full stroke + this from where it starts
   cal_sg_floor:        "80"        # min acceptable SG_RESULT during a clean calibration travel
   cal_vib_backstop:    "0.45"      # vibration threshold floor held during calibration probes
   stall_release_steps: "24500"     # stall auto-release back-off (~8 mm sash travel)

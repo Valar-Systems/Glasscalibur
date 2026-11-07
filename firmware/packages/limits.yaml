@@ -166,6 +166,11 @@ binary_sensor:
                       ESP_LOGI("limit", "S4 re-sync: counter %d -> %d steps%s", (int) trig, (int) at,
                                learned > 0 ? "" : " (nothing learned yet: open_default_mm)");
                   }
+              # S4 is pressed: the position is known again (fully open).
+              - lambda: |-
+                  id(pos_unknown) = false;
+                  id(limit_faults) &= ~8;
+              - script.execute: position_commit
               - component.update: open_stroke_sensor
               - component.update: limit_fault_text
               - script.execute: s4_coast_report
@@ -214,6 +219,10 @@ binary_sensor:
               - stepper.set_target:
                   id: driver
                   target: 0
+              # S5 is pressed: the position is known again (closed); motion_halt saves it.
+              - lambda: |-
+                  id(pos_unknown) = false;
+                  id(limit_faults) &= ~8;
               - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 2 PRESSED"
               - lambda: |-
@@ -221,6 +230,18 @@ binary_sensor:
                   id(homed_fresh) = true;        // the next open from here may teach the stroke
                   id(limit_faults) &= ~4;        // the close switch works
               - component.update: limit_fault_text
+              # A set position asked for while the position was unknown: go there now.
+              - if:
+                  condition:
+                    lambda: 'return id(pending_pos) >= 0.0f;'
+                  then:
+                    - lambda: |-
+                        const float p = id(pending_pos);
+                        id(pending_pos) = -1.0f;
+                        ESP_LOGI("limit", "Position known at S5 - moving to the requested %.0f %%", p * 100.0f);
+                        auto call = id(glasscalibur_cover).make_call();
+                        call.set_position(p);
+                        call.perform();
             else:
               - logger.log: "LIMIT 2 blip while opening - ignored"
 
