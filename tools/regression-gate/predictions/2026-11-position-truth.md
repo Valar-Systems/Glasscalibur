@@ -185,3 +185,63 @@ guard fails; the base fails the new facts.
 
 - PC6 Cut power right after an open from S5 starts (marker set, carriage still on S5):
   after the restart the cover shows 0 %, no "position unknown".
+
+## Amendment 2 — R1 re-registered; shutdown and update stop paths (review, 2026-11-07; appended before the code)
+
+**R1 miss, kept on record.** Amendment 1 added the idle-only 30 s flush on purpose but left
+R1's "the only flushes are move_begin, position_commit and the Speed select" unchanged; on
+the amended head that fact failed (instrument fixes for the wrapped scripts aside, rerun and
+disclosed). Re-registered: the only flushes are `move_begin` (skipped while a move is
+running), `position_commit` (at stops, after the halt), the Speed setting (idle only), the
+30 s flush (idle only), and ESPHome's shutdown flush (after the halt, below). None runs while
+the motor moves.
+
+**Shutdown.** Today on_shutdown 600 captures the position and clears the marker without
+halting; the driver's own stop comes after it (priority 800). A soft reboot mid-move (Restart,
+the end of an update, any App.reboot) could leave the driver running at its last VACTUAL while
+the chip reboots, and the unit would trust a position that is already wrong. Now on_shutdown
+600 halts first (`id(driver)->stop()`: VACTUAL 0; the driver's register write waits for the
+UART transmission to finish), then captures the position, then clears the marker. The globals
+and the shutdown flush run after it.
+
+**Firmware updates.** The update listener (on_boot 900) sets `ota_active` and halts motion
+when any update begins (ESPHome OTA, the GitHub update, the web-page upload), and clears it
+when the update fails or is aborted (a completed update restarts the unit). While it is set,
+the cover's open / close / position actions refuse first (logged "... refused - firmware
+update in progress"), so Home Assistant, the API, the web page, Button 1 and schedules are
+refused; Auto-Calibrate refuses too.
+
+**Where the unit really stopped.** The S5 handler logs the count at its trigger, and an
+unknown-position close logs the count it starts from, so after a power cut the recovery
+Close shows the carriage's true stop point (start minus trigger), whatever moment the power
+actually went.
+
+### Checks, re-registered
+
+G2 CHANGED exactly the 13 of Amendment 1 plus `cover:Glasscalibur` open_action and
+close_action, `script:auto_calibrate` and `esphome:on_boot :: 900.0` (17); NEW exactly the
+same 3; DROPPED none.
+R1 as re-registered above (the flush list), plus R2 (Amendment 1), plus R3:
+- on_shutdown 600: `id(driver)->stop()` comes before the position capture and the marker
+  clear;
+- the update listener sets `ota_active` and stops on OTA_STARTED, and clears it on OTA_ERROR
+  and OTA_ABORT; `ota_active` is not persisted;
+- open_action, close_action and position_action check `ota_active` first; auto_calibrate
+  refuses while it is set;
+- the S5 handler logs its trigger count; an unknown-position close logs its start count.
+Sabotages: a scratch head whose on_shutdown captures before the halt fails; one whose
+listener doesn't set `ota_active` fails; the base fails R3.
+
+### Bench, added
+
+- SR1 Restart mid-move at Slow, on the 2.2.0 build (no fix) and on this build: record whether
+  the motor is still turning while the unit reboots, and the position after it (on this build:
+  the motor stops before the reboot, the position comes back exact, not unknown).
+- U1 Start a web-page firmware upload during a move at Slow: the motor stops at once; Open,
+  Close and Set position via the API and REST, and a fired schedule, are refused (logged)
+  while it runs; abort the upload: moves are accepted again. The GitHub update stops a move
+  the same way.
+- Power cuts by a switched plug (Daniel sets one up; by hand is the fallback): the 24 V
+  adapter plugs into it, so the cut is on the mains side and the unit runs a moment longer
+  while the adapter drains. Each test is judged by where the unit actually stopped (the
+  recovery Close's logged travel to S5), not by when the plug switched. USB stays unplugged.
