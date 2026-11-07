@@ -103,6 +103,8 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   is the reverse. A unit that stored both off turns StallGuard on at startup.
 - The web UI's tamper group is now named **Tamper**. Entity names and IDs are
   unchanged.
+- The two limit-switch inputs also turn on the chip's internal pull-up, so a broken
+  connection between a switch and the chip reads as a released switch.
 - A reboot mid-travel now keeps the position where the motor stopped, not
   where the travel began.
 - Docs: web control URLs use the entity-name form, e.g.
