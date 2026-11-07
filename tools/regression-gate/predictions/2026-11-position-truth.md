@@ -128,3 +128,60 @@ W1 Wording: the push gate passes on the net diff, every commit, the commit messa
 - L4 changes: with S5 dead, the close ends 0.6 mm past zero with "close limit switch not
   detected", the cover shows 50 % (not closed) and Fault adds "position unknown"; the
   next Close runs on until the stall stop at the bumper (Obstruction event, back-off).
+
+## Amendment 1 — review items before merge (2026-11-07; appended before the code; nothing above was edited)
+
+**1. A pressed switch wins.** At startup a pressed S5 or S4 decides the position even when
+the marker is set (the marker can be left set while the carriage sits on a switch: a cut in
+the first moments of an open from S5, or between the S5 press and the stop's write). The
+boot step already does this (its S5 / S4 branch clears "unknown" after the marker check);
+it is now registered. And a seek toward a switch that is already pressed ends at once: while
+the position is unknown, `drive_close` with S5 pressed (level, not edge) and `drive_open`
+with S4 pressed settle the position (as the switch handler would), clear "unknown", commit,
+and start no move.
+
+**2. Halt before write.** Every stop halts the motor before `position_commit`: STOP and the
+lockout and calibration stops go through `motion_halt` (stop first, commit last); the S5
+handler through `motion_halt`; the S4 handler halts first and commits after its re-sync;
+stalls stop the driver before `stall_response` (a back-off continues the move; its end, or
+`motion_halt`, commits); the completion poll now halts the driver explicitly before it
+commits. The boot step commits only while the motor is idle.
+
+**3. The periodic flush and moves — finding.** It can't be confirmed as built: ESPHome's
+60 s flush writes every pending save, and persisted values do change while the motor
+moves — this PR's own 200 ms refresh of the saved position (a Slow stroke spans several
+flushes), stall counters and auto-tune at a stall followed by a back-off, and settings
+changed during a move (the Speed select even flushes at once). So the design no longer
+depends on which values change when:
+- ESPHome's periodic flush is turned off (`preferences: flash_write_interval: never`; the
+  shutdown flush stays);
+- a new 30 s interval flushes pending saves only while the motor is idle;
+- `move_begin` flushes only when the motor isn't already moving (a reversal mid-move keeps
+  the marker that is already stored); the Speed select flushes only while idle;
+- the 200 ms poll no longer copies the position into the persisted global while moving
+  (the stop's commit and the planned-reboot capture save it).
+Settings changed while idle reach flash within 30 s; anything changed during a move
+reaches flash at its stop.
+
+### Checks, re-registered
+
+G2 CHANGED exactly the earlier twelve plus `select:Speed :: set_action`; NEW exactly
+`script:move_begin`, `script:position_commit` and `interval:30s :: then`; DROPPED none.
+R2 (new facts, resolved config):
+- the boot step's S5 / S4 branch clears "unknown" after the marker check;
+- `drive_close` / `drive_open` first check "unknown and S5 (S4) pressed" and then start no
+  move;
+- `motion_halt`: `stepper.stop` before `position_commit`; the S4 handler: `motion_halt`
+  before its `position_commit`; the completion poll: `stepper.stop` before
+  `position_commit`; the boot commit is guarded by "idle";
+- `preferences.flash_write_interval` is never; the 30 s flush, `move_begin`'s flush and
+  the Speed select's flush are each guarded by "not moving"; the 200 ms poll doesn't
+  assign the persisted position.
+Sabotages: a scratch head whose `drive_close` lacks the level check fails; one whose
+`motion_halt` commits before `stepper.stop` fails; one whose 30 s flush lacks the idle
+guard fails; the base fails the new facts.
+
+### Bench, added
+
+- PC6 Cut power right after an open from S5 starts (marker set, carriage still on S5):
+  after the restart the cover shows 0 %, no "position unknown".
