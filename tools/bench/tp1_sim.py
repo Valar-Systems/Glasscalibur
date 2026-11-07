@@ -19,6 +19,8 @@ SPEEDS = {"Slow": 1200, "Medium": 2600, "Fast": 5500}
 class SimDevice:
     def __init__(self, fault=None):
         self.fault, self.t = fault, 0.0
+        self.mac = "02" + "00" * 4 + "01"          # a locally administered, made-up address
+        self.commands = []                          # every command received (M1's sabotage)
         self.k_move = 0.022 if fault == "slow-heat" else K_MOVE
         self.logs, self.events, self.seen = [], [], {}
         self.core = self.sens = 30.0
@@ -44,6 +46,7 @@ class SimDevice:
     async def close(self):
         if self.heat_on:
             self.heater_stop(5)
+        print(f"(sim) commands received: {len(self.commands)}", flush=True)
 
     async def sleep(self, s):
         end = self.t + s
@@ -69,6 +72,7 @@ class SimDevice:
                 "BENCH heater": self.heat_on, "BENCH heater status": hs, **self.vals}.get(name)
 
     async def cover(self, path, cmd, pos=None):
+        self.commands.append(("cover", cmd))
         what = {"open": "Open", "close": "Close", "set": "Set position"}.get(cmd)
         if cmd == "stop":
             self.log("[D][main]: COVER stop_action")
@@ -87,6 +91,7 @@ class SimDevice:
         return 200
 
     async def press(self, name):
+        self.commands.append(("press", name))
         if name == "BENCH heater keepalive":
             self.ka = self.t
         elif name in ("BENCH: fire scheduled open", "BENCH: fire scheduled close"):
@@ -117,6 +122,7 @@ class SimDevice:
                 self.cal_status, self.cal_until = "Calibrating...", self.t + 600
 
     async def switch(self, name, on):
+        self.commands.append(("switch", name))
         if name == "BENCH heater":
             if on and not self.heat_on and not self.lockout and self.reading < 62:
                 self.heat_on, self.ihold, self.stop_code = True, 19, 0
@@ -127,10 +133,12 @@ class SimDevice:
                 self.heater_stop(7)
 
     async def select(self, name, option):
+        self.commands.append(("select", name))
         if name == "Speed":
             self.speed = option
 
     async def number(self, name, value):
+        self.commands.append(("number", name))
         if name == "Motor Current":
             self.current = float(value)
 

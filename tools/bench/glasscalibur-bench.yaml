@@ -21,3 +21,30 @@ button:
             - stepper.stop: driver
             - logger.log: "BENCH: simulated stall"
             - script.execute: stall_response
+
+# Simulated dead limit switch for L3 / L4 (the switches are soldered to the board, so they
+# can't be unplugged). While a BENCH switch is on, its limit sensor reads released whatever
+# the pin does - what a broken switch or cracked joint reads with a pull-up on the board.
+# The filter is appended after the product's own filters, which stay unchanged. Turn it on
+# only while that limit switch is released: a binary sensor re-evaluates on a pin change.
+switch:
+  - platform: template
+    name: "BENCH: open switch (S4) dead"
+    id: bench_s4_dead
+    entity_category: CONFIG
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "BENCH: close switch (S5) dead"
+    id: bench_s5_dead
+    entity_category: CONFIG
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+
+binary_sensor:
+  - id: !extend limit_switch_1
+    filters:
+      - lambda: 'if (id(bench_s4_dead).state) return false; return x;'
+  - id: !extend limit_switch_2
+    filters:
+      - lambda: 'if (id(bench_s5_dead).state) return false; return x;'

@@ -8,10 +8,13 @@ and 600 mA; the test package's hold-current heater is the fallback, used only if
 peak below 60 °C. The script changes Speed, Motor Current and the calibration only as TP-1
 needs, and puts them back at the end.
 
-    python tools/bench/tp1_run.py --host <unit address> [--out DIR]
-    python tools/bench/tp1_run.py --sim [--sim-fault NAME]      # dry run against tp1_sim.py
+    python tools/bench/tp1_run.py --host <unit address> --mac <unit MAC> [--out DIR]
+    python tools/bench/tp1_run.py --sim [--mac MAC] [--sim-fault NAME]   # dry run (tp1_sim.py)
 
-The unit address is given on the command line only; it is not written to the report.
+Find the address with tools/bench/find_unit.py --mac <MAC from the USB flash>. Before its first
+command the script checks that the unit itself reports that MAC, and stops if it doesn't, so
+no other unit on the network can get these commands. Neither the address nor the MAC is
+written to the report or the log file.
 Thresholds: warning 50, gate 55, lockout 60, clear below 48 °C.
 """
 import argparse, asyncio, datetime, json, pathlib, re, sys, time, urllib.parse, urllib.request
@@ -20,6 +23,16 @@ WARN, GATE, LOCK, CLEAR = 50.0, 55.0, 60.0, 48.0
 BACKSTOP_C, STALE_S = 62.0, 10.0
 PENDING_LIMIT_S = 30 * 60
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# The kept device log never holds an address, a MAC or a unit-name suffix.
+REDACT = [(re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<ip>"),
+          (re.compile(r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b"), "<mac>"),
+          (re.compile(r"(glasscalibur-)[0-9a-fA-F]{6}\b"), r"\1XXXXXX")]
+
+
+def redact(line):
+    for rx, rep in REDACT:
+        line = rx.sub(rep, line)
+    return line
 
 E_TEMP, E_STATE, E_LOCKOUT = "Motor Temperature", "State", "Thermal Lockout"
 E_ALERT, E_OBSTRUCTION, E_COVER = "Thermal Alert", "Obstruction", "Glasscalibur"
@@ -51,6 +64,7 @@ class RealDevice:
         from aioesphomeapi import APIClient, LogLevel
         self.api = APIClient(self.host, 6053, None, client_info="glasscalibur-tp1")
         await self.api.connect(login=True)
+        self.mac = (await self.api.device_info()).mac_address
         infos, _ = await self.api.list_entities_services()
         for i in infos:
             self.keys[i.name], self.kinds[i.key] = i.key, (type(i).__name__, i.name)
@@ -70,7 +84,7 @@ class RealDevice:
 
     def _on_log(self, msg):
         line = ANSI.sub("", msg.message.decode("utf-8", "replace") if isinstance(msg.message, bytes) else msg.message)
-        self.logs.append((self.now(), line))
+        self.logs.append((self.now(), redact(line)))
 
     def get(self, name):
         return self.states.get(name)
@@ -565,9 +579,14 @@ class Run:
         return summary["result"]
 
 
+def norm_mac(m):
+    return "".join(c for c in str(m or "").lower() if c in "0123456789abcdef")
+
+
 async def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host")
+    ap.add_argument("--mac", help="the unit's MAC, as the USB flash reported it")
     ap.add_argument("--sim", action="store_true")
     ap.add_argument("--sim-fault")
     ap.add_argument("--out")
@@ -580,10 +599,21 @@ async def main():
         from tp1_sim import SimDevice
         dev = SimDevice(fault=a.sim_fault)
     elif a.host:
+        if not a.mac:
+            ap.error("--mac is required with --host")
         dev = RealDevice(a.host)
     else:
-        ap.error("give --host <unit address> or --sim")
+        ap.error("give --host <unit address> --mac <MAC>, or --sim")
     await dev.start()
+    # The unit must report the requested MAC before any command is sent (none is sent so far).
+    want = norm_mac(a.mac) if a.mac else (norm_mac(dev.mac) if a.sim else "")
+    if len(want) != 12 or norm_mac(dev.mac) != want:
+        print("STOP: the unit at this address does not report the requested MAC - no command sent.")
+        (out / "tp1-report.md").write_text("# TP-1 not run: the unit did not report the requested MAC\n",
+                                           encoding="utf-8")
+        await dev.close()
+        return 2
+    print("Unit identity: the unit reports the requested MAC.", flush=True)
     await dev.sleep(5)                        # first states
     run = Run(dev, out)
     try:

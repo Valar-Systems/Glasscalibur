@@ -173,3 +173,23 @@ and a rule at the top of `tools/bench/tp1-bench.yaml` says so for later edits.
 Re-registered B2: against the bench build, the only product change is the
 version-publishing boot step (`dev` -> `dev-tp1`); nothing is dropped; every new anchor
 is a BENCH one. Entities: only BENCH ones added, none removed. Same sabotage.
+
+## Amendment 3 — the unit is found by its MAC (Daniel, 2026-11-06; appended before the code)
+
+The bench unit's address can change, and no other Glasscalibur on Daniel's network may
+ever get these commands. So the unit is identified by the MAC address the USB flash
+reports, never by its name or a remembered address:
+- `tools/bench/find_unit.py --mac <MAC>` finds the unit's current address from the PC's
+  neighbour table and confirms it by asking the device itself (native API device info).
+  It prints the address on Daniel's screen only.
+- `tp1_run.py` requires `--mac`. After connecting it compares the unit's own MAC (device
+  info) with `--mac` and refuses to send any command if they differ. Neither tool writes
+  the MAC or the address into a report or log file.
+
+M1 Dry run: with the simulated unit's MAC the run proceeds as before (PASS).
+   Sabotage: with a different `--mac` the script exits before its first command (the
+   simulated unit records no command).
+M2 `find_unit.py`: given a neighbour table with two units, it returns only the address
+   whose device reports the requested MAC. Sabotage: a requested MAC that no device
+   reports returns nothing (exit 1). Tested offline with a fake table and fake devices,
+   none of it committed.
