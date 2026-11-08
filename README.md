@@ -62,11 +62,10 @@ All of these come from the firmware in [`firmware/`](firmware):
   moved and sounds the buzzer.
 - **Child Lock** — makes the unit's own button ignore presses; the web UI, Home
   Assistant and schedules keep working.
-- **Position across reboots** — the position is saved while moving and at every
+- **Position across reboots** — the position is saved at every stop and at every
   restart, including the restart at the end of a firmware update.
 - **Updates over the air** — the **Update Firmware (GitHub)** button installs the
-  latest release; the motor stops when an update begins, and no move starts until it
-  ends.
+  latest release; the motor stops when an update begins.
 
 <p>
 <img src="docs/images/installed-closeup.jpg" alt="Glasscalibur mounted along the bottom of a horizontal sliding window, close up" width="49%">
