@@ -216,3 +216,9 @@ Sabotages: the base fails R3.
   adapter plugs into it, so the cut is on the mains side and the unit runs a moment longer
   while the adapter drains. Each test is judged by where the unit actually stopped (the
   recovery Close's logged travel to S5), not by when the plug switched. USB stays unplugged.
+
+## Amendment 3 — PC6 validity (review, 2026-11-07; before the bench)
+
+- PC6 counts only if the unit boots with S5 still pressed. If S5 is released at boot, the
+  cut came too late for PC6: that run is not a PC6 result (disclosed), and PC6 is rerun with
+  the cut sooner.
