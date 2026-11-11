@@ -418,3 +418,48 @@ connection, and I6-3 fails.
   - Sabotages: without item 1, no STOP (the open runs on); without item 2, the run ends with an
     uncaught `GuardLost` as in I6-3a.
   - Then the full set reruns on the fixed head: I6-1..I6-5, I6-3a/b, P6-1, S6.
+
+### Amendment 6 note 3 — ruling 47 (2026-11-11; before the code)
+Ruling 47 approves the fix in b04ae77 and adds item 3. As it will be coded:
+1. **STOP first.** A case that ends on the interlock (`GuardMissing`, `GuardLost`, or the guard not
+   back after a cut) sends STOP first, then records the case. The STOP goes straight to the unit; an
+   error is ignored, since the unit may be off. A case that ends because the unit didn't come back
+   is not an interlock end and sends nothing.
+2. **Case-start wait.** It sends nothing and sleeps without the in-move check.
+3. **Guard missing at case start.** A guard missing or lost during the case-start wait ends only
+   that case. It is recorded NOT RUN, "guard missing: open guard not connected and watching (...);
+   nothing sent". The next case waits again (up to 30 s). A guard exception in the case-start wait
+   is caught there and recorded the same way, so none ends the run.
+
+**I6-5's scenario, refined before coding.** The registered scenario can't be produced: the guard
+drops while the carriage is still opening, and the cut's start is refused. The gate's in-move
+check reads the heartbeat at the same instant, just before the cut's interlock check. So a drop
+while opening always ends the case as `GuardLost`, with the gate's own STOP; that path is I6-2. On
+the bench the two reads are also microseconds apart. Each registered sabotage is therefore shown in
+a scenario where it can fire:
+- **I6-5 (item 1).**
+  - Setup: `--sim-guard drop-at-cut` (the heartbeat goes stale 5 s after the script's first STOP
+    and stays stale); cases PC3,PC5,PC6. PC3 stops at 40 % with its own STOP, waits 10 s, and its
+    cut is refused at the start.
+  - Predicted: a STOP within 1 s of the refusal, sent before PC3 is recorded "not run: open guard
+    not connected and watching". PC5 and PC6 are recorded "not run: guard missing". Nothing else is
+    sent. The run exits cleanly (report written, no uncaught exception).
+  - Sabotage (no STOP on an interlock end): no STOP, so the check fails.
+- **I6-6 (item 3; ruling 47's check).**
+  - Setup: `--sim-fault no-return` (the unit doesn't come back after the plug-in); guard `ok`;
+    cases PC2,PC3,PC5,PC6.
+  - Predicted: PC2 is recorded "did not come back within 120 s". The guard never returns. PC3, PC5
+    and PC6 each wait 30 s and are recorded "not run: guard missing". Nothing is sent after PC2 is
+    recorded. The run exits cleanly.
+  - Sabotage (a), without item 2 (the case-start wait through the in-move check): the unit's last
+    reported State is OPENING, from before the cut, and the guard is lost, so the gate sends STOP
+    in PC3's case-start wait. "Nothing sent" fails; item 3's catch keeps the run going.
+  - Sabotage (b), the case-start refusal ends the run instead of going on: PC5 and PC6 are never
+    recorded, so the check fails.
+- **I6-3a now gives a reading.** PC2's first cut ends its case (`GuardLost`, STOP first). The unit
+  stays off, since the case ended before the plug-in prompt. PC3, PC5 and PC6 are recorded "not
+  run: guard missing". The run exits cleanly. I6-3 fails, as predicted.
+- **Harness.** The dry run also writes each recorded row into the simulator's event list, so
+  "STOP first, then the record" is checked by order, not only by time.
+- **Full rerun on one head.** I6-1 to I6-6, I6-3a, I6-3b, P6-1, I6-4 and S6, each with its
+  sabotage.
