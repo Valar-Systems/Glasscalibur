@@ -47,6 +47,31 @@ Dry run without a unit: `python tools/bench/tp1_run.py --sim`
 (`--sim-fault slow-heat` exercises the heater fallback; `rest-close-accepted` and
 `refused-close-no-cancel` are faults the script must report as FAIL).
 
+## Power cuts by hand (2.3.0, PC1-PC6)
+
+`pc_run.py` runs the power-cut cases in
+[`2026-11-position-truth.md`](../regression-gate/predictions/2026-11-position-truth.md)
+(PC1-PC6, Amendments 3-4) on the 2.3.0 bench build, with Daniel present.
+
+1. Unplug the unit's USB cable, so the chip loses power with the motor.
+2. `python tools/bench/pc_run.py --host <unit address> --mac <MAC> --window-end HH:MM`
+   (Pacific time; `--cases PC2,PC3` runs a subset). It checks the MAC before its first
+   command and after every power-up. No case starts with under 5 minutes of the window
+   left; at the end of the window it sends STOP and stops.
+3. At "PULL THE 24 V ADAPTER FROM THE WALL NOW" (after a 3-second countdown) pull the
+   adapter from the wall. The script waits until the unit drops off the network, then says
+   when to plug it back in.
+4. A case whose speed isn't the unit's calibrated speed isn't run: Auto-Calibrate at that
+   speed first (PC1 runs at Fast; PC2, PC3, PC5 and PC6 at Slow), then run those cases.
+
+Each case is judged on its registered outcome. Where the carriage really stopped comes from
+the recovery move's log lines and is reported beside the last position the unit reported.
+The report and the device log go to `tools/bench/out/pc-<time>/` without the address or the MAC.
+
+Dry run without a unit: `python tools/bench/pc_run.py --sim --sim-cal Slow --cases PC2,PC3,PC4,PC5,PC6`
+and `--sim --sim-cal Fast --cases PC1` (`--sim-fault no-drop`, `stays-known`, `pc6-late`,
+`wrong-mac` and `speed-locked` are faults the script must report).
+
 ## Rule for edits
 
 Give every interval in a bench package a period no product interval uses (see the top of
