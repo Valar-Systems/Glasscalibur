@@ -222,3 +222,40 @@ Sabotages: the base fails R3.
 - PC6 counts only if the unit boots with S5 still pressed. If S5 is released at boot, the
   cut came too late for PC6: that run is not a PC6 result (disclosed), and PC6 is rerun with
   the cut sooner.
+
+## Amendment 4 — power cuts by hand (review, 2026-11-11; before the bench script)
+
+- No switched plug (Amendment 2's plug bullet no longer applies). Daniel pulls the unit's 24 V
+  adapter from the wall, as in a real outage, when the bench script tells him, and plugs it back
+  in when it tells him. USB stays unplugged during these tests, so the chip loses power too.
+- New bench script `tools/bench/pc_run.py` runs PC1-PC6. Like `tp1_run.py` it sends nothing
+  until the unit reports the requested MAC, checks it again after every power-up, and keeps no
+  address, MAC or unit-name suffix in its report or log. A window-end guard: no case starts with
+  under 5 minutes left; when the window ends it sends STOP and stops.
+- Each cut: a 3-second countdown ending "PULL THE 24 V ADAPTER NOW". The script then waits until
+  the unit drops off the network (3 failed connection attempts in a row, about a second apart).
+  If it hasn't dropped within 60 s it sends STOP and records an instrument failure (USB still
+  plugged in?), and the case may be rerun. 10 s after the drop it says "PLUG IT BACK IN", waits
+  up to 120 s for the unit, checks the MAC, then reads the cover, State, Fault and both switches.
+- With USB unplugged, the boot log isn't captured (the API connects after boot). PC1/PC2's "boot
+  log says the move was interrupted" is read from Fault ("position unknown") and the cover (50 %).
+- Where it stopped: a recovery Close logs "from N steps" and "S5 triggered at M steps": the
+  carriage stopped (N - M) steps from S5. A recovery Open starts from the last saved stop (S5,
+  count 0, in PC1/PC2) and logs "S4 triggered at M steps": it stopped (learned stroke - M) from S5.
+  The report gives this beside the last position the unit reported before it went off. Each case
+  is judged on its registered outcome, not on when the adapter came out.
+- PC6: the script sends Open at the end of the countdown. The run counts only if the unit
+  reported OPENING before it went off and boots with S5 pressed. Otherwise it is not a PC6
+  result (disclosed), and the script reruns with the call earlier (up to 3 runs).
+- Speeds: PC1 Fast; PC2, PC3, PC5 and PC6 Slow. A calibrated unit runs at its calibrated speed;
+  if that isn't the case's speed, the script doesn't run the case and says which speed needs an
+  Auto-Calibrate first (Daniel's call).
+- Script checks (dry run, `tools/bench/pc_sim.py`, no unit):
+  S1 the clean simulation passes PC1-PC6 with the registered outcomes;
+  S2 each fault is reported at the right step: no-drop (the unit never goes off: instrument
+     failure, STOP sent, no "plug back in"); stays-known (the old position comes back after a
+     cut: PC1 FAIL); pc6-late (the first PC6 cut lands after S5 released: "not a PC6 result",
+     rerun, the second run counts); wrong-mac (no command sent); speed-locked (calibrated at
+     Slow: PC1 not run, "Auto-Calibrate at Fast first");
+  S3 with 4 minutes of window left, no case starts;
+  S4 the push gate passes.
