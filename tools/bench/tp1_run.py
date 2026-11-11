@@ -8,14 +8,17 @@ and 600 mA; the test package's hold-current heater is the fallback, used only if
 peak below 60 °C. The script changes Speed, Motor Current and the calibration only as TP-1
 needs, and puts them back at the end.
 
-    python tools/bench/tp1_run.py --host <unit address> --mac <unit MAC> [--out DIR]
-    python tools/bench/tp1_run.py --sim [--mac MAC] [--sim-fault NAME]   # dry run (tp1_sim.py)
+    python tools/bench/tp1_run.py --host <unit address> --mac <unit MAC> --window-end HH:MM [--out DIR]
+    python tools/bench/tp1_run.py --sim [--mac MAC] [--sim-fault NAME] [--sim-window-left MIN]   # dry run
 
 Find the address with tools/bench/find_unit.py --mac <MAC from the USB flash>. Before its first
 command the script checks that the unit itself reports that MAC, and stops if it doesn't, so
 no other unit on the network can get these commands. Neither the address nor the MAC is
 written to the report or the log file.
 Thresholds: warning 50, gate 55, lockout 60, clear below 48 °C.
+Bench window (--window-end, Pacific time): it doesn't start with under 5 minutes left; when the
+window ends it sends STOP, turns the heater off, puts back what needs no motion (Motor Current)
+and reports the run as INCOMPLETE, naming anything not put back.
 """
 import argparse, asyncio, datetime, json, pathlib, re, sys, time, urllib.parse, urllib.request
 
@@ -27,6 +30,39 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 REDACT = [(re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<ip>"),
           (re.compile(r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b"), "<mac>"),
           (re.compile(r"(glasscalibur-)[0-9a-fA-F]{6}\b"), r"\1XXXXXX")]
+
+
+class WindowOver(Exception):
+    pass
+
+
+def window_from(arg):
+    """--window-end HH:MM, Pacific time, today -> minutes left, as a function of the device."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Los_Angeles")
+    h, m = map(int, arg.split(":"))
+    end = datetime.datetime.now(tz).replace(hour=h, minute=m, second=0, microsecond=0)
+    return lambda dev: (end - datetime.datetime.now(tz)).total_seconds() / 60.0
+
+
+class Windowed:
+    """The device, with every wait checking the bench window (in 1 s slices)."""
+
+    def __init__(self, dev, minutes_left):
+        self._dev, self._left, self.off = dev, minutes_left, False
+
+    def __getattr__(self, name):
+        return getattr(self._dev, name)
+
+    async def sleep(self, s):
+        end = self._dev.now() + s
+        while True:
+            if not self.off and self._left(self._dev) <= 0:
+                raise WindowOver()
+            rest = end - self._dev.now()
+            if rest <= 0:
+                return
+            await self._dev.sleep(min(rest, 1.0))
 
 
 def redact(line):
@@ -562,8 +598,9 @@ class Run:
 
     def report(self):
         fails = [r for r in self.rows if r["verdict"] == "FAIL"]
+        cut_short = [r for r in self.rows if r["verdict"] == "INCOMPLETE"]
         obstructions = sum(1 for mv in self.moves if mv["obstruction"])
-        summary = {"result": "FAIL" if fails else "PASS", "moves_to_55": self.moves_to[GATE],
+        summary = {"result": "FAIL" if fails else "INCOMPLETE" if cut_short else "PASS", "moves_to_55": self.moves_to[GATE],
                    "moves_to_60": self.moves_to[LOCK], "false_obstruction_stops": obstructions,
                    "heater_used": self.heater_used, "before": self.snapshot, "after": self.after}
         (self.out / "tp1-report.json").write_text(json.dumps({"summary": summary, "steps": self.rows,
@@ -595,6 +632,8 @@ async def main():
     ap.add_argument("--mac", help="the unit's MAC, as the USB flash reported it")
     ap.add_argument("--sim", action="store_true")
     ap.add_argument("--sim-fault")
+    ap.add_argument("--window-end", help="end of the bench window, HH:MM Pacific (required with --host)")
+    ap.add_argument("--sim-window-left", type=float, help="sim only: minutes of window left at the start")
     ap.add_argument("--out")
     a = ap.parse_args()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -605,8 +644,8 @@ async def main():
         from tp1_sim import SimDevice
         dev = SimDevice(fault=a.sim_fault)
     elif a.host:
-        if not a.mac:
-            ap.error("--mac is required with --host")
+        if not a.mac or not a.window_end:
+            ap.error("--mac and --window-end are required with --host")
         dev = RealDevice(a.host)
     else:
         ap.error("give --host <unit address> --mac <MAC>, or --sim")
@@ -620,11 +659,38 @@ async def main():
         await dev.close()
         return 2
     print("Unit identity: the unit reports the requested MAC.", flush=True)
+    if a.sim:
+        m0 = a.sim_window_left
+        left = (lambda d: m0 - d.now() / 60.0) if m0 is not None else (lambda d: 1e9)
+    else:
+        left = window_from(a.window_end)
+    if left(dev) < 5:
+        msg = f"{left(dev):.1f} min of the bench window left (under 5)"
+        print(f"NOT STARTED: {msg} - no command sent.")
+        (out / "tp1-report.md").write_text(f"# TP-1 not started: {msg}\n", encoding="utf-8")
+        await dev.close()
+        return 3
     await dev.sleep(5)                        # first states
-    run = Run(dev, out)
+    wdev = Windowed(dev, left)
+    run = Run(wdev, out)
     try:
-        await run.run()
-        await run.restore()
+        try:
+            await run.run()
+            await run.restore()
+        except WindowOver:
+            wdev.off = True
+            await dev.cover("api", "stop")
+            if dev.get(E_HEATER):
+                await dev.switch(E_HEATER, False)
+            s, back, not_back = run.snapshot, [], []
+            if s and s.get(E_CURRENT) is not None and dev.get(E_CURRENT) != s[E_CURRENT]:
+                await dev.number(E_CURRENT, s[E_CURRENT])
+                back.append("Motor Current")
+            if s and dev.get(E_SPEED) != s.get(E_SPEED):
+                not_back.append(f"Speed ({s.get(E_SPEED)}) and a calibration at it")
+            run.rec("bench window ended", "INCOMPLETE",
+                    "STOP sent; heater off; put back: " + (", ".join(back) or "nothing needed")
+                    + "; NOT put back: " + (", ".join(not_back) or "nothing"))
     finally:
         if dev.get(E_HEATER):
             await dev.switch(E_HEATER, False)
