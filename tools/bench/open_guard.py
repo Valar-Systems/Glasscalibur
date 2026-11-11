@@ -16,10 +16,18 @@ from S5. The guard:
 - once Open stroke is learned (94-101 mm) it only records.
 Bench window (--window-end, Pacific time): it doesn't start with under 5 minutes left; when the
 window ends it sends STOP if a move is under way, writes its record and exits.
+Connection: if it drops (a reboot, a flash, a power cut) the guard records it, alerts Daniel,
+keeps trying, checks the MAC again when the unit is back, and resumes watching. It writes a
+heartbeat (out/guard-heartbeat.json) that every bench script checks before it sends a move
+(bench_common.py). Its alerts show on top of Daniel's screen and are spoken. It doesn't start if
+its --trimmed-carriage flag disagrees with the sitting record (bench_session.py).
 It sends no command except STOP, checks the unit's MAC first (like tp1_run.py), and writes
 its record to tools/bench/out/<time>/open-guard.md without the address or the MAC.
 """
 import argparse, asyncio, datetime, pathlib, sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from bench_common import Prompter, read_sitting, write_heartbeat  # noqa: E402
 
 LIMIT_OLD_MM, LIMIT_TRIMMED_MM, DEFAULT_MM = 97.0, 100.5, 101.0
 
@@ -28,6 +36,8 @@ class Guard:
     def __init__(self, dev, trimmed=False):
         self.dev, self.rows = dev, []
         self.limit = LIMIT_TRIMMED_MM if trimmed else LIMIT_OLD_MM
+        self.carriage = "trimmed" if trimmed else "old"
+        self.prompt = Prompter(record_only=True)
         self.referenced = bool(dev.get("Close Limit Switch"))
         self.stopped_this_move, self.last_state = False, None
         self.rec("INFO", f"carriage: {'trimmed (--trimmed-carriage set)' if trimmed else 'old (no flag)'}; "
@@ -41,6 +51,8 @@ class Guard:
         row = (round(self.dev.now(), 1), verdict, what)
         self.rows.append(row)
         print(f"[{row[0]:8.1f}s] {verdict:5} {what}", flush=True)
+        if verdict in ("FAIL", "ALERT"):
+            self.prompt.alert(f"Open guard: {what}", say="Open guard alert. " + what)
 
     async def poll(self):
         d = self.dev
@@ -75,20 +87,41 @@ class Guard:
         (out / "open-guard.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-async def watch(dev, guard, minutes_left, step=0.1):
-    """Poll until the window ends (STOP if a move is under way) or Ctrl+C."""
+async def watch(dev, guard, minutes_left, step=0.1, beat=None, reconnect=None):
+    """Poll until the window ends (STOP if a move is under way) or Ctrl+C. When the connection drops,
+    record it, keep trying to reconnect (reconnect() checks the MAC), and resume. beat(connected,
+    watching) writes the heartbeat the other bench scripts check."""
+    beat = beat or (lambda c, w: write_heartbeat(c, w, guard.carriage))
+    lost, last_beat = False, -1e9
     try:
         while True:
             if minutes_left(dev) <= 0:
-                moving = dev.get("State") in ("OPENING", "CLOSING")
+                moving = getattr(dev, "connected", True) and dev.get("State") in ("OPENING", "CLOSING")
                 if moving:
                     await dev.cover("api", "stop")
                 guard.rec("INFO", "bench window ended: guard stopped" + (" (STOP sent)" if moving else ""))
+                beat(getattr(dev, "connected", True), False)
                 return
+            if not getattr(dev, "connected", True):
+                beat(False, False)
+                if not lost:
+                    lost = True
+                    guard.rec("ALERT", "connection to the unit lost: not watching (scripts won't move it)")
+                if reconnect and await reconnect():
+                    lost = False
+                    guard.rec("INFO", "reconnected (MAC checked): watching again")
+                else:
+                    await dev.sleep(2)
+                continue
             await guard.poll()
+            if dev.now() - last_beat >= 0.5:
+                beat(True, True)
+                last_beat = dev.now()
             await dev.sleep(step)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
+    finally:
+        beat(False, False)
 
 
 async def main():
@@ -109,6 +142,12 @@ async def main():
         print("STOP: the unit at this address does not report the requested MAC - guard not started.")
         await dev.close()
         return 2
+    sitting = read_sitting()
+    if sitting and (sitting.get("carriage") == "trimmed") != a.trimmed_carriage:
+        print(f"NOT STARTED: the sitting record says the {sitting.get('carriage')} carriage is fitted, but the "
+              f"guard was started {'with' if a.trimmed_carriage else 'without'} --trimmed-carriage.")
+        await dev.close()
+        return 4
     left = window_from(a.window_end)
     if left(dev) < 5:
         print(f"NOT STARTED: {left(dev):.1f} min of the bench window left (under 5).")
@@ -116,10 +155,25 @@ async def main():
         return 3
     await dev.sleep(3)
     guard = Guard(dev, trimmed=a.trimmed_carriage)
+    guard.prompt = Prompter(title="Open guard")
+    want = norm_mac(a.mac)
+
+    async def reconnect():
+        try:
+            await dev.start()
+        except Exception:
+            return False
+        if norm_mac(dev.mac) != want:
+            dev.connected = False
+            guard.rec("FAIL", "a different unit answered at this address: not watching")
+            return False
+        await dev.sleep(2)
+        return True
     print(f"Open guard running ({guard.rows[0][2]}); Ctrl+C to end.", flush=True)
     try:
-        await watch(dev, guard, left)
+        await watch(dev, guard, left, reconnect=reconnect)
     finally:
+        guard.prompt.close()
         guard.write(out)
         await dev.close()
     return 1 if any(v == "FAIL" for _, v, _ in guard.rows) else 0
