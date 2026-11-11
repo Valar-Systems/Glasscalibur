@@ -31,8 +31,8 @@ globals:
 
   # Last known stepper position in steps. Persisted so the cover entity
   # survives reboots without re-homing. Written to flash at once at every stop
-  # (position_commit), refreshed in RAM only by the 200 ms poll while moving, and
-  # captured from the driver at shutdown (on_shutdown below).
+  # (position_commit) and captured from the driver at shutdown (on_shutdown
+  # below); never while moving.
   - id: global_current_position
     type: int
     restore_value: yes
@@ -91,9 +91,8 @@ esphome:
   # marker. ESPHome runs on_shutdown hooks in reverse setup-priority order, so at
   # priority 600 this runs before the driver's own shutdown stop (800), the
   # globals storing their values (800) and the preference syncer's flush (1000).
-  # Halt first: stop() writes VACTUAL 0 and returns once the UART has sent it
-  # (tmc2209_api write_register reads the one-wire echo back, then flushes), so
-  # the saved position is where the motor really stopped. A power cut or an
+  # stop() writes VACTUAL 0 and returns once the UART has sent it (tmc2209_api
+  # write_register reads the one-wire echo back, then flushes). A power cut or an
   # unplanned restart skips shutdown: the marker then stays set (see on_boot).
   on_shutdown:
     - priority: 600
@@ -826,9 +825,8 @@ script:
 # Periodic intervals — motion completion, tamper check, vibration stall
 # -----------------------------------------------------------------------------
 # Three interval blocks run independently:
-#   1. 200 ms — refreshes the saved position while moving, detects natural
-#               OPENING/CLOSING -> IDLE transitions (target reached) and
-#               persists the final position.
+#   1. 200 ms — detects natural OPENING/CLOSING -> IDLE transitions (target
+#               reached) and persists the final position.
 #   2. 1 s   — anti-tamper check; only runs while IDLE and tamper detection
 #               is enabled. Latches tamper_detected, flips state to TAMPERED,
 #               and fires the buzzer alarm script.

@@ -61,9 +61,9 @@
 #   counter; S4 either teaches the stroke (an open that started from a fresh S5
 #   home with no stall) or re-syncs the counter to it. Reaching either target
 #   without its switch stops there and raises a fault (the "Fault" sensor).
-#   Position is saved at every IDLE transition, refreshed every 200 ms while
-#   moving, and captured once more at shutdown, so the cover survives reboots
-#   (including one mid-travel) without re-homing.
+#   Position is saved at every stop and at shutdown, so the cover survives
+#   reboots without re-homing; after a move cut off by a power cut it is
+#   unknown until a limit switch is pressed (see packages/motion.yaml).
 #
 # -----------------------------------------------------------------------------
 # State machine (global_state, mirrored to the "State" text_sensor)
