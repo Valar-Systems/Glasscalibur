@@ -1,7 +1,8 @@
 # Glasscalibur — automatic window opener
 
-Glasscalibur opens and closes horizontal sliding windows with a small stepper motor,
-a lead screw and a sliding ram. It runs [ESPHome](https://esphome.io) on an ESP32‑C6, so you can
+Glasscalibur opens and closes horizontal sliding windows, and single‑ and double‑hung
+windows (one unit mounted at the center of the sash), with a small stepper motor, a lead
+screw and a sliding ram. It runs [ESPHome](https://esphome.io) on an ESP32‑C6, so you can
 control it from a web browser on your network with no app or cloud account, pair it
 with Home Assistant, put it on a schedule, or drive it from anything that can send
 an HTTP request.
@@ -73,10 +74,22 @@ All of these come from the firmware in [`firmware/`](firmware):
 - **In the kit:** the unit; two mounts with VHB pads and optional screws; three
   140.5 mm extension tubes; three 30 mm connector rods; final rods A (150 mm) and
   B (180 mm); two M10 jam nuts; the egress nut; the 24 V adapter.
-- **Fit:** 21.1–37.6 in (535–956 mm) between the jamb and sash mount faces with the
-  window closed, using one to three extension tubes.
+- **Windows:** horizontal sliding, single‑hung and double‑hung. On a hung window, mount
+  one unit at the center of the sash.
+- **Fit:** 20.5–36.9 in (519–939 mm) between the frame and sash surfaces where the
+  mounts go, measured along the direction the window slides, with the window closed.
+  The span sets the parts (table below).
 - **Power:** use only the supplied 24 V DC adapter. USB powers the board for flashing
   but can't run the motor.
+
+| Span (mm) | Extension tubes | Final rod |
+|---|---|---|
+| 519–628 | 1 | A (150 mm) |
+| 629–658 | 1 | B (180 mm) |
+| 659–769 | 2 | A |
+| 770–799 | 2 | B |
+| 800–909 | 3 | A |
+| 910–939 | 3 | B |
 
 1. Mount the unit with its two end mounts (VHB tape; an optional screw in each).
 2. Join it to your Wi‑Fi (see [first setup](firmware/README.md#first-setup)).
