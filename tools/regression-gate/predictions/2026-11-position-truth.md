@@ -362,3 +362,20 @@ judged in the model: at each send, the guard's connection was made after the uni
 Added sabotage I6-3b: with only the plain heartbeat check after power-up (no "since the call"
 condition), the `late` model sends a recovery move while the guard is still on its old
 connection, and I6-3 fails.
+
+### Amendment 6 note 2 — details the code adds (2026-11-11; after the code, before any check runs)
+- **Case start.** Before a case sends anything it waits up to 30 s for the guard to read connected
+  and watching (the guard may still be reconnecting after PC4's Restart, or be started a moment
+  after the script). If it doesn't, the case reads "not run: open guard not connected and
+  watching" and nothing is sent (I6-1 unchanged), and one alert is shown and spoken.
+- **Standby prompt.** Each cut starts with "Power cut next: stand by the 24 V adapter at the wall"
+  (shown and spoken), then 3 s so it has been spoken before the countdown starts. Otherwise the
+  spoken countdown would queue behind it. The cut therefore comes about 3 s later in the move than
+  before. PC1, PC2 and PC5 are cut a little further open; PC3 and PC6 start from rest. The
+  registered outcomes don't depend on where the cut lands.
+- **PC6.** The Open sent after the call (reruns 2 and 3) is a move and still needs the guard. If it
+  is refused, that run isn't a PC6 result (as when the unit is already off).
+- **Dry-run models.** PC4's Restart: the guard reads not connected from the press, and is back 3 s
+  after the unit. `--sim-guard slow-start`: no heartbeat until 10 s into the run, then `ok`.
+- **I6-4.** With `slow-start`, PC2 starts once the heartbeat appears and passes. Sabotage: with no
+  wait at case start, PC2 reads not run.
