@@ -112,6 +112,10 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Build: ESPHome pinned to 2026.6.5 (the version v2.1.0 shipped with) and both
   external components pinned to the commits v2.1.0 used.
 - The driver starts disabled at boot.
+- **Driver status.** The unit checks the driver's status flags. If the driver reports a
+  reset, an undervoltage or a fault, the unit stops, re-applies the driver settings and
+  treats the position as unknown. During a thermal lockout the driver output is off; it
+  comes back on only after its settings are confirmed.
 
 ### Fixed
 - The unit no longer reboots every 15 minutes when no Home Assistant (native
