@@ -91,9 +91,10 @@ esphome:
   # marker. ESPHome runs on_shutdown hooks in reverse setup-priority order, so at
   # priority 600 this runs before the driver's own shutdown stop (800), the
   # globals storing their values (800) and the preference syncer's flush (1000).
-  # stop() writes VACTUAL 0 and returns once the UART has sent it (tmc2209_api
-  # write_register reads the one-wire echo back, then flushes). A power cut or an
-  # unplanned restart skips shutdown: the marker then stays set (see on_boot).
+  # Halt, then save. stop() writes VACTUAL 0 and returns once the UART has sent
+  # it (tmc2209_api write_register reads the one-wire echo back, then flushes). A
+  # power cut or an unplanned restart skips shutdown: the marker then stays set
+  # (see on_boot).
   on_shutdown:
     - priority: 600
       then:
