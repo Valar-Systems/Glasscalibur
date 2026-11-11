@@ -1,4 +1,4 @@
-"""Dry-run unit for pc_run.py — BENCH ONLY (predictions: 2026-11-position-truth.md, Amendment 4).
+"""Dry-run unit for pc_run.py — BENCH ONLY (predictions: 2026-11-position-truth.md, Amendments 4 and 6).
 
 A virtual-time model of the 2.3.0 position rules, close enough to exercise the script's logic:
 the move marker, the saved position, the switches (S5 at 0, S4 at the learned stroke), the
@@ -9,17 +9,27 @@ adapter drains, the unit drops off the network, and boots a few seconds after he
 
 Faults (--sim-fault): no-drop (USB still powers the unit: it never goes off), stays-known (the
 old position comes back after a cut), pc6-late (the first PC6 cut comes after S5 has released),
-wrong-mac, speed-locked (calibrated at Slow)."""
+wrong-mac, speed-locked (calibrated at Slow).
+
+The open guard (--sim-guard, Amendment 6 note): ok (its heartbeat reads not connected 2 s after
+the unit goes off, and connected again 3 s after the unit is back), late (it reads connected
+through a cut and notices only at its first keepalive ping after the unit is back, pings every
+20 s, then is back 3 s later), missing (no heartbeat), drop-in-recovery (like ok, then stale from
+3 s into the first move after the first power-up), slow-start (no heartbeat until 10 s into the
+run, then ok). A Restart closes the connection, so the guard notices it at once. Every move records whether the guard's connection at the send was made after
+the unit's last power-up."""
+import math
 SPM = 3066.6667
 SPEEDS = {"Slow": 1200, "Medium": 2600, "Fast": 5500}
 UNKNOWN_LINE = "position unknown - close or open fully"
 # A switch triggers at its point (S5 at 0, S4 at the stroke) and releases only after the carriage
 # has moved this far back off it (hysteresis).
 S5_RELEASE_MM, S4_RELEASE_MM = 0.5, 0.25
+GUARD_NOTICE_S, GUARD_BACK_S, GUARD_PING_S, GUARD_STALE_AFTER_S = 2.0, 3.0, 20.0, 3.0
 
 
 class SimDevice:
-    def __init__(self, fault=None, cal="Slow", stroke_mm=99.3):
+    def __init__(self, fault=None, cal="Slow", stroke_mm=99.3, guard="ok"):
         self.fault, self.t = fault, 0.0
         self.mac = "0a1b2c3d4e5f" if fault != "wrong-mac" else "0a1b2c3d4e60"
         self.cal = "Slow" if fault == "speed-locked" else cal
@@ -35,6 +45,14 @@ class SimDevice:
         self.calls = []                    # every command sent, for the checks
         self.s5_on, self.s4_on = True, False
         self.cache = {}
+        # the open guard
+        self.guard = guard
+        self.g_conn, self.g_since, self.g_lost_at, self.g_back_at, self.g_stale_from = True, 0.0, None, None, None
+        self.booted_at, self.off_by_cut, self.cut_boots = 0.0, False, 0
+        self.moves, self.timed = [], []    # (t, cmd, guard fresh, cut power-ups so far); (t, what, ...)
+        self.sampler, self.sample_next = None, 0.0
+        if guard == "slow-start":                  # no heartbeat until 10 s into the run, then ok
+            self.g_conn, self.g_back_at = False, 10.0
 
     # --- interface used by pc_run.py
     def now(self):
@@ -50,6 +68,7 @@ class SimDevice:
         end = self.t + s
         while self.t < end - 1e-9:
             self._tick(min(0.05, end - self.t))
+        self.t = max(self.t, end)          # end exactly on time: a caller that sleeps the rest would wait forever
 
     def get(self, name):
         if self.up:
@@ -79,8 +98,13 @@ class SimDevice:
             await self.sleep(1.0)
         return False
 
-    def say(self, text):
-        print(f"[{self.t:8.1f}s] >>> {text}", flush=True)
+    def sample_every(self, fn, period=0.2):
+        self.sampler, self.sample_period, self.sample_next = fn, period, self.t
+
+    def hear(self, kind, text, say):
+        """The bench hears a prompt (pc_run's Prompter): Daniel pulls the adapter a moment after
+        the call and plugs it back in when told."""
+        self.timed.append((self.t, "prompt", kind, text, say))
         if text.startswith("PULL THE 24 V ADAPTER"):
             self.calls.append(("prompt", "pull"))
             if self.fault != "no-drop":
@@ -94,8 +118,49 @@ class SimDevice:
 
     pc6_next = False                       # set by the script around a PC6 cut (sim only)
 
+    def guard_check(self):
+        """The open guard's heartbeat, as bench_common.guard_ok() would read it: (ok, reason)."""
+        if self.guard == "missing":
+            return False, "no heartbeat from the open guard (is open_guard.py running?)"
+        if self.g_stale_from is not None and self.t >= self.g_stale_from:
+            return False, "the open guard's heartbeat is stale"
+        if not self.g_conn:
+            return False, "the open guard has lost its connection to the unit"
+        return True, "open guard connected and watching"
+
+    def _guard_unit_off(self, closed):
+        """The unit went off: a Restart closes the connection (noticed at once); after a power cut
+        the guard notices from its keepalive (ok: 2 s; late: at its first ping after the unit is back)."""
+        if closed:
+            if self.g_conn:
+                self.g_conn = False
+                self.timed.append((self.t, "guard", "lost"))
+        elif self.guard != "late":
+            self.g_lost_at = self.t + GUARD_NOTICE_S
+
+    def _guard_tick(self):
+        if self.g_lost_at is not None and self.t >= self.g_lost_at:
+            self.g_lost_at = None
+            if self.g_conn:
+                self.g_conn = False
+                self.timed.append((self.t, "guard", "lost"))
+        if not self.g_conn and self.up and self.g_back_at is None:
+            self.g_back_at = self.t + GUARD_BACK_S
+        if self.g_back_at is not None and self.t >= self.g_back_at:
+            self.g_back_at = None
+            if self.up:
+                self.g_conn, self.g_since = True, self.t
+                self.timed.append((self.t, "guard", "back"))
+
     async def cover(self, cmd, pos=None):
         self.calls.append(("cover", cmd, pos))
+        if cmd == "stop":
+            self.timed.append((self.t, "stop"))
+        else:
+            fresh = self.guard_check()[0] and self.g_since >= self.booted_at
+            self.moves.append((self.t, cmd, fresh, self.cut_boots))
+            if self.guard == "drop-in-recovery" and self.cut_boots >= 1 and self.g_stale_from is None:
+                self.g_stale_from = self.t + GUARD_STALE_AFTER_S
         if not self.powered:
             return                         # the chip is off: the command is lost
         if cmd == "stop":
@@ -112,6 +177,7 @@ class SimDevice:
         if name == "Restart" and self.up:
             self._halt()                   # on_shutdown: halt, then save
             self.up, self.boot_at = False, self.t + 6.0
+            self._guard_unit_off(closed=True)
 
     async def switch(self, name, on):
         self.calls.append(("switch", name, on))
@@ -234,6 +300,11 @@ class SimDevice:
         self._halt()
 
     def _boot(self):
+        self.booted_at = self.t
+        if self.off_by_cut:
+            self.off_by_cut, self.cut_boots = False, self.cut_boots + 1
+            if self.guard == "late" and self.g_conn:    # noticed at its first ping after the unit is back
+                self.g_lost_at = math.ceil(self.t / GUARD_PING_S) * GUARD_PING_S
         self.count, self.dir, self.state, self.pending = self.saved, 0, "IDLE", None
         if self.marker and self.fault != "stays-known":
             self.unknown = True
@@ -256,13 +327,18 @@ class SimDevice:
             self.motor_on_until = self.t + 0.2          # the adapter drains
             self.drop_at = self.t + 0.3
         if not self.powered and getattr(self, "drop_at", None) is not None and self.t >= self.drop_at:
-            self.up, self.drop_at = False, None
+            self.up, self.drop_at, self.off_by_cut = False, None, True
+            self._guard_unit_off(closed=False)
         if self.plug_at is not None and self.t >= self.plug_at:
             self.plug_at, self.powered = None, True
             self.boot_at = self.t + 6.0
             self.dir = 0
         if self.boot_at is not None and self.t >= self.boot_at:
             self._boot()
+        self._guard_tick()
+        if self.sampler and self.t >= self.sample_next:
+            self.sample_next = self.t + self.sample_period
+            self.sampler()
         running = self.dir != 0 and (self.powered or (self.motor_on_until and self.t < self.motor_on_until))
         if not running:
             if not self.powered:

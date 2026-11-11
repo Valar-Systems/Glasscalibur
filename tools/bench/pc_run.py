@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """Power cuts by hand, PC1-PC6 — BENCH ONLY
-(tools/regression-gate/predictions/2026-11-position-truth.md, PC1-PC6 and Amendments 3-4).
+(tools/regression-gate/predictions/2026-11-position-truth.md, PC1-PC6 and Amendments 3, 4 and 6).
 
     python tools/bench/pc_run.py --host <unit address> --mac <MAC> --window-end HH:MM [--cases PC2,PC3]
-    python tools/bench/pc_run.py --sim [--sim-cal Slow|Fast] [--sim-fault NAME] [--cases ...]   # dry run
+    python tools/bench/pc_run.py --sim [--sim-cal Slow|Fast] [--sim-fault NAME] [--sim-guard MODE] [--cases ...]
 
 Daniel cuts the power: when the script counts down to "PULL THE 24 V ADAPTER NOW" he pulls the
 unit's 24 V adapter from the wall; the script waits until the unit drops off the network, and
 10 s later tells him to plug it back in. USB stays unplugged, so the chip loses power too.
+Every pull and plug-in step, the countdown and every alert open in the prompt window on top of
+his screen and are spoken (bench_common.Prompter); dry runs record them instead.
 Each case is judged on its registered outcome; where the carriage really stopped is taken from
 the recovery move's log lines and reported beside the last position the unit reported.
+
+Open guard interlock (bench_common.py, Amendment 6): no case starts, no cut starts and no move is
+sent unless open_guard.py is connected and watching; outside a cut, if the guard drops while a
+move is under way the script sends STOP and ends the case. From the call until the unit and the
+guard are back, the guard's lost connection is expected. The guard counts as back once its
+heartbeat has read not connected (or stale) since the call and reads connected and watching
+again, since a guard still on its old connection can read connected for a while after the unit
+is back.
 
 Like tp1_run.py it sends nothing until the unit reports the requested MAC, checks the MAC again
 after every power-up, and keeps no address, MAC or unit-name suffix in its report or log. No case
@@ -17,7 +27,10 @@ starts with under 5 minutes of the bench window left (--window-end, Pacific time
 window ends the script sends STOP and stops. A case whose speed isn't the unit's calibrated speed
 is not run (Auto-Calibrate at that speed first; Daniel's call).
 """
-import argparse, asyncio, datetime, pathlib, re, sys, time
+import argparse, asyncio, datetime, json, pathlib, re, sys, time
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from bench_common import GuardLost, GuardMissing, MoveGate, Prompter, guard_ok  # noqa: E402
 
 SPM = 3066.6667
 CASE_SPEED = {"PC1": "Fast", "PC2": "Slow", "PC3": "Slow", "PC4": None, "PC5": "Slow", "PC6": "Slow"}
@@ -115,8 +128,14 @@ class RealDevice:
             await self.sleep(2)
         return False
 
-    def say(self, text):
-        print(f"\a[{time.strftime('%H:%M:%S')}] >>> {text}", flush=True)
+    def sample_every(self, fn, period=0.2):
+        """Call fn about every 0.2 s in the background until the run ends (the open guard's
+        heartbeat is sampled through a cut, while the script itself waits on the network)."""
+        async def loop():
+            while True:
+                fn()
+                await asyncio.sleep(period)
+        self._sampler = asyncio.get_running_loop().create_task(loop())
 
     async def cover(self, cmd, pos=None):
         key = self.keys[E_COVER]
@@ -135,15 +154,59 @@ class RealDevice:
         self.api.select_command(self.keys[name], option)
 
 
+# ----------------------------------------------------------------------------- the open guard
+class _PathCover:
+    """MoveGate sends cover(path, cmd, pos) (tp1_run's signature); this script's devices take
+    cover(cmd, pos)."""
+
+    def __init__(self, dev):
+        self._dev = dev
+
+    def __getattr__(self, name):
+        return getattr(self._dev, name)
+
+    async def cover(self, path, cmd, pos=None):
+        return await self._dev.cover(cmd, pos)
+
+
+class PcGate(MoveGate):
+    """The bench interlock for power cuts. A move, and the start of a cut, need the open guard
+    connected and watching. While in_cut (from the call until the unit and the guard are back) the
+    guard's lost connection is expected: no in-move check, so it neither sends STOP nor ends the
+    case."""
+
+    def __init__(self, dev, check=guard_ok, on_event=None):
+        super().__init__(_PathCover(dev), check=check, on_event=on_event)
+        self.raw, self.in_cut = dev, False
+
+    def guard_now(self):
+        return self._check()
+
+    def require(self, what):
+        self._require(what)
+
+    async def cover(self, cmd, pos=None):
+        return await super().cover("api", cmd, pos)
+
+    async def sleep(self, s):
+        if self.in_cut:
+            return await self.raw.sleep(s)
+        return await super().sleep(s)
+
+
 # ----------------------------------------------------------------------------- the run
 class WindowOver(Exception):
     pass
 
 
 class Run:
-    def __init__(self, dev, out, window_end):
+    def __init__(self, dev, out, window_end, prompt=None):
+        """dev: a PcGate around the unit; prompt: a bench_common.Prompter."""
         self.dev, self.out, self.window_end, self.rows = dev, out, window_end, []
         self.verdicts = {}
+        self.prompt = prompt or Prompter(record_only=True)
+        self.guard_seen_lost, self.guard_alerted = False, False
+        dev.raw.sample_every(self.sample_guard)
 
     # --- helpers
     def rec(self, case, step, verdict, detail=""):
@@ -177,6 +240,55 @@ class Run:
                 return True
             await self.dev.sleep(step)
         return cond()
+
+    # --- the open guard (Amendment 6)
+    async def guard_ready(self, case, timeout=30):
+        """Before a case sends anything: wait (up to 30 s) for the guard to be connected and
+        watching; if it isn't, the case is not run and nothing is sent."""
+        end = self.dev.now() + timeout
+        while True:
+            ok, why = self.dev.guard_now()
+            if ok:
+                self.guard_alerted = False
+                return True
+            if self.dev.now() >= end:
+                break
+            await self.guard()
+            await self.dev.sleep(0.5)
+        self.rec(case, "start", "NOT RUN", f"open guard not connected and watching ({why}); nothing sent")
+        if not self.guard_alerted:
+            self.guard_alerted = True
+            self.prompt.alert(f"Power cuts not started: the open guard isn't connected and watching ({why}).",
+                              say="Power cut script: not started. The open guard is not watching.")
+        return False
+
+    def begin_cut(self):
+        """From the call on: the guard's lost connection is expected (no in-move check), and the
+        guard counts as back only after it has read not connected or stale since the call."""
+        self.dev.in_cut, self.guard_seen_lost = True, False
+
+    def end_cut(self):
+        self.dev.in_cut = False
+
+    def sample_guard(self):
+        """Called about every 0.2 s (RealDevice.sample_every, or each step of the dry run)."""
+        if self.dev.in_cut and not self.dev.guard_now()[0]:
+            self.guard_seen_lost = True
+
+    async def guard_back(self, case, timeout=60):
+        end = self.dev.now() + timeout
+        while self.dev.now() < end:
+            await self.guard()
+            self.sample_guard()
+            if self.guard_seen_lost and self.dev.guard_now()[0]:
+                self.rec(case, "open guard", "INFO", "back (reconnected since the cut): watching")
+                return True
+            await self.dev.sleep(0.2)
+        self.rec(case, "open guard", "NOT RUN", "open guard not connected and watching: not back within 60 s "
+                 "of the unit, so no recovery move was sent; the case ended")
+        self.prompt.alert("The open guard is not back after the power cut: no recovery move sent, case ended.",
+                          say="Power cut script: the open guard is not back. Case ended.")
+        return False
 
     def g(self, name):
         return self.dev.get(name)
@@ -231,12 +343,17 @@ class Run:
     async def cut(self, case, at_call=None, open_delay=0.0):
         """Countdown, the call, then wait for the unit to drop off the network.
         Returns (dropped, last cover position reported, whether OPENING was reported)."""
-        for n in (3, 2, 1):
-            self.dev.say(f"Get ready to pull the 24 V adapter from the wall: {n}")
+        self.dev.require("power cut")                  # the interlock: GuardMissing ends the case
+        self.prompt.act("Power cut next: stand by the 24 V adapter at the wall",
+                        say="Power cut next. Stand by the adapter.")
+        await self.dev.sleep(3)                         # the spoken countdown starts after this
+        for n, word in ((3, "three"), (2, "two"), (1, "one")):
+            self.prompt.act(f"Get ready to pull the 24 V adapter from the wall: {n}", say=word)
             await self.dev.sleep(1)
         if at_call and not open_delay:
             await at_call()
-        self.dev.say("PULL THE 24 V ADAPTER FROM THE WALL NOW")
+        self.begin_cut()
+        self.prompt.act("PULL THE 24 V ADAPTER FROM THE WALL NOW", say="Pull the adapter now.")
         if at_call and open_delay:
             await self.dev.sleep(open_delay)
             try:
@@ -261,8 +378,11 @@ class Run:
             await self.dev.cover("stop")
         except Exception:
             pass
+        self.end_cut()
         self.rec(case, "power cut", "INSTRUMENT", "the unit was still on the network 60 s after the call "
                  "(USB still plugged in?); STOP sent - not a result, may be rerun")
+        self.prompt.alert("The unit didn't go off within 60 s of the call (USB still plugged in?). STOP sent.",
+                          say="Power cut script: the unit did not go off. Stop sent. Is USB still plugged in?")
         return False, last, opening
 
     async def wait_drop(self, timeout):
@@ -276,11 +396,16 @@ class Run:
 
     async def power_back(self, case):
         await self.dev.sleep(10)
-        self.dev.say("PLUG THE 24 V ADAPTER BACK INTO THE WALL NOW")
+        self.prompt.act("PLUG THE 24 V ADAPTER BACK INTO THE WALL NOW", say="Plug the adapter back in now.")
         if not await self.dev.reconnect(120):
             self.rec(case, "power back", "INSTRUMENT", "the unit (with the requested MAC) did not come back within 120 s")
+            self.prompt.alert("The unit did not come back within 120 s of the plug-in.",
+                              say="Power cut script: the unit did not come back.")
             return False
         await self.dev.sleep(3)
+        if not await self.guard_back(case):            # no recovery move until the guard is back
+            return False
+        self.end_cut()
         return True
 
     def stop_point_close(self, m):
@@ -387,9 +512,9 @@ class Run:
         for attempt, lead in enumerate((0.0, 0.3, 0.6), 1):
             if not await self.to_s5(case, "Slow"):
                 return
-            setattr(self.dev, "pc6_next", True)
+            setattr(self.dev.raw, "pc6_next", True)
             dropped, last, opening = await self.cut(case, at_call=lambda: self.dev.cover("open"), open_delay=lead)
-            setattr(self.dev, "pc6_next", False)
+            setattr(self.dev.raw, "pc6_next", False)
             if not dropped or not await self.power_back(case):
                 return
             s5 = bool(self.g(E_S5))
@@ -411,10 +536,20 @@ class Run:
                 if self.minutes_left() < 5:
                     self.rec(case, "start", "NOT RUN", f"{self.minutes_left():.1f} min of the window left (under 5)")
                     continue
-                if not await self.speed_ok(case):
+                if not await self.guard_ready(case):
                     continue
-                self.rec(case, "start", "INFO", f"speed {CASE_SPEED[case] or 'any'}")
-                await table[case](case)
+                try:
+                    if not await self.speed_ok(case):
+                        continue
+                    self.rec(case, "start", "INFO", f"speed {CASE_SPEED[case] or 'any'}")
+                    await table[case](case)
+                except GuardMissing as why:
+                    self.rec(case, "open guard", "NOT RUN", f"open guard not connected and watching - {why}; "
+                             "nothing more sent in this case")
+                except GuardLost as why:
+                    self.rec(case, "open guard", "INSTRUMENT", f"{why}; the case ended (may be rerun)")
+                finally:
+                    self.end_cut()
         except WindowOver:
             self.rec("-", "window", "NOT RUN", "the bench window ended: STOP sent, nothing more run")
 
@@ -435,6 +570,9 @@ class Run:
         (self.out / "pc-report.md").write_text("\n".join(out) + "\n", encoding="utf-8")
         (self.out / "pc-device.log").write_text("\n".join(f"{t:9.2f} {l}" for t, l in self.dev.logs) + "\n",
                                                 encoding="utf-8")
+        (self.out / "pc-prompts.json").write_text(json.dumps({"prompts": self.prompt.sent,
+                                                              "guard": getattr(self, "guard_events", [])}, indent=1),
+                                                  encoding="utf-8")
         print(f"Report: {self.out / 'pc-report.md'} -> {overall}")
         return overall
 
@@ -460,6 +598,8 @@ async def main():
     ap.add_argument("--sim-fault")
     ap.add_argument("--sim-cal", default="Slow")
     ap.add_argument("--sim-window-left", type=float, help="sim only: minutes of window left at the start")
+    ap.add_argument("--sim-guard", default="ok",
+                    help="sim only: ok | late | missing | drop-in-recovery | slow-start (the open guard in the dry run)")
     ap.add_argument("--out")
     a = ap.parse_args()
     cases = [c.strip().upper() for c in a.cases.split(",") if c.strip()]
@@ -469,9 +609,8 @@ async def main():
     out = pathlib.Path(a.out or pathlib.Path(__file__).parent / "out" / f"pc-{stamp}")
     out.mkdir(parents=True, exist_ok=True)
     if a.sim:
-        sys.path.insert(0, str(pathlib.Path(__file__).parent))
         from pc_sim import SimDevice
-        dev = SimDevice(fault=a.sim_fault, cal=a.sim_cal)
+        dev = SimDevice(fault=a.sim_fault, cal=a.sim_cal, guard=a.sim_guard)
         want = norm_mac(a.mac) if a.mac else "0a1b2c3d4e5f"
         left = a.sim_window_left
         window = (lambda d: left - d.now() / 60.0) if left is not None else None
@@ -489,11 +628,28 @@ async def main():
         return 2
     print("Unit identity: the unit reports the requested MAC. USB must be unplugged for these tests.", flush=True)
     await dev.sleep(3)
-    run = Run(dev, out, window)
+    if a.sim:
+        class Heard(Prompter):
+            """Dry run: prompts are recorded, and the simulated bench hears them (pc_sim's Daniel)."""
+            def _send(self, kind, text, say):
+                super()._send(kind, text, say)
+                dev.hear(kind, text, say)
+        prompt, check = Heard(record_only=True), dev.guard_check
+    else:
+        prompt, check = Prompter(title="Glasscalibur power cuts"), guard_ok
+    events = []
+
+    def on_event(kind, text):
+        events.append((round(dev.now(), 1), kind, text))
+        prompt.alert(text, say="Power cut script: " + ("stop sent, the open guard dropped." if kind == "stop"
+                                                       else "move not sent, the open guard is not watching."))
+    run = Run(PcGate(dev, check=check, on_event=on_event), out, window, prompt)
+    run.guard_events = events
     try:
         await run.run(cases)
     finally:
         result = run.report(cases)
+        prompt.close()
         await dev.close()
     return 0 if result == "PASS" else 1
 
