@@ -137,6 +137,11 @@ script:
     then:
       - lambda: |-
           id(thermal_lockout) = true;
+          // The driver output goes off too, until the lockout clears and the driver
+          // settings are confirmed (packages/driver.yaml).
+          id(driver_hold) = true;
+          id(driver)->enable(false);
+          ESP_LOGW("thermal", "Driver output off until the lockout clears");
           if (cause == 2)
             ESP_LOGW("thermal", "THERMAL LOCKOUT - no valid motor temperature reading for %d s",
                      (int) ${thermal_stale_s});
@@ -171,6 +176,10 @@ script:
       - event.trigger:
           id: thermal_event
           event_type: cleared
+      # The driver output comes back on only after its settings are re-applied and
+      # confirmed (driver_confirm).
+      - script.execute: driver_reconfigure
+      - script.execute: driver_confirm
 
   - id: thermal_warn
     then:
@@ -252,6 +261,21 @@ interval:
   # 500 ms: a period no other interval uses.
   - interval: 500ms
     then:
+      # Driver status (packages/driver.yaml): a reset, a charge-pump undervoltage or
+      # a driver error -> stop, output off, re-apply the settings, position unknown.
+      # While the driver is held, keep its output off (any new target would turn it
+      # on by itself) and retry an unconfirmed re-apply once no lockout is latched.
+      - lambda: |-
+          const uint32_t gstat = id(driver)->read_register(GSTAT) & 0x07;
+          if (gstat && !id(driver_recover)->is_running())
+            id(driver_recover)->execute((int) gstat);
+          if (id(driver_hold)) {
+            id(driver)->TMC2209Component::enable(false);
+            if (!id(thermal_lockout) && !id(driver_recover)->is_running()) {
+              id(driver_reconfigure)->execute();
+              id(driver_confirm)->execute();
+            }
+          }
       - lambda: |-
           if (!id(thermal_lockout) &&
               millis() - id(thermal_last_ok_ms) >= (uint32_t) ${thermal_stale_s} * 1000UL)

@@ -223,12 +223,20 @@ cover:
       # Thermal start gate first (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return ${thermal_blocked};'
+            lambda: 'return ${thermal_blocked} || id(driver_hold);'
           then:
             - script.execute: thermal_cancel_pending
-            - script.execute:
-                id: thermal_refused
-                what: "Open"
+            - if:
+                condition:
+                  lambda: 'return ${thermal_blocked};'
+                then:
+                  - script.execute:
+                      id: thermal_refused
+                      what: "Open"
+                else:
+                  - logger.log:
+                      level: WARN
+                      format: "Open refused - driver held while its settings are re-applied"
           else:
             - script.execute: thermal_cancel_pending
             - if:
@@ -243,12 +251,20 @@ cover:
       # Thermal start gate first (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return ${thermal_blocked};'
+            lambda: 'return ${thermal_blocked} || id(driver_hold);'
           then:
             - script.execute: thermal_cancel_pending
-            - script.execute:
-                id: thermal_refused
-                what: "Close"
+            - if:
+                condition:
+                  lambda: 'return ${thermal_blocked};'
+                then:
+                  - script.execute:
+                      id: thermal_refused
+                      what: "Close"
+                else:
+                  - logger.log:
+                      level: WARN
+                      format: "Close refused - driver held while its settings are re-applied"
           else:
             - script.execute: thermal_cancel_pending
             - if:
@@ -263,12 +279,20 @@ cover:
       # Thermal start gate first (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return ${thermal_blocked};'
+            lambda: 'return ${thermal_blocked} || id(driver_hold);'
           then:
             - script.execute: thermal_cancel_pending
-            - script.execute:
-                id: thermal_refused
-                what: "Set position"
+            - if:
+                condition:
+                  lambda: 'return ${thermal_blocked};'
+                then:
+                  - script.execute:
+                      id: thermal_refused
+                      what: "Set position"
+                else:
+                  - logger.log:
+                      level: WARN
+                      format: "Set position refused - driver held while its settings are re-applied"
           else:
             - script.execute: thermal_cancel_pending
             - if:

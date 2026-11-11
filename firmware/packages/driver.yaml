@@ -1,0 +1,128 @@
+# =============================================================================
+# Glasscalibur - driver status check and driver hold
+# =============================================================================
+# The unit reads the driver's status flags (GSTAT: reset, drv_err, uv_cp) in the
+# 500 ms check (packages/temperature.yaml). When one is set it stops, switches
+# the driver output off, makes the position unknown, re-applies every driver
+# setting (as at boot) and switches the driver back on once the settings are
+# confirmed. During a thermal lockout the driver output is off too, and comes
+# back on the same way after the lockout clears.
+#
+# driver_hold: set while the driver output is held off (a thermal lockout, or
+# settings not yet confirmed). The 500 ms check keeps it off, and the cover's
+# Open / Close / Set position and Auto-Calibrate refuse while it is set; STOP
+# still works.
+# =============================================================================
+
+globals:
+  - id: driver_hold
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # IFCNT (the driver's count of received writes) when driver_reconfigure started.
+  - id: driver_ifcnt_before
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+esphome:
+  on_boot:
+    # After core's driver configuration (priority 600): clear the status flags
+    # the power-up left, so the 500 ms check only sees later ones.
+    - priority: 590
+      then:
+        - lambda: |-
+            const uint32_t g = id(driver)->read_register(GSTAT);
+            ESP_LOGI("driver", "GSTAT at boot 0x%02x - cleared", (unsigned) (g & 0x07));
+            id(driver)->write_register(GSTAT, 0x07);
+
+script:
+  # The driver reported a reset, a charge-pump undervoltage or a driver error.
+  - id: driver_recover
+    mode: single
+    parameters:
+      gstat: int
+    then:
+      - lambda: |-
+          id(driver_hold) = true;
+          id(driver)->enable(false);            // driver output off first (stop() writes VACTUAL 0)
+          ESP_LOGW("driver", "Driver status 0x%02x (%s%s%s) - stopped, driver output off; re-applying "
+                   "its settings; position unknown", (unsigned) gstat,
+                   (gstat & 1) ? "reset " : "", (gstat & 2) ? "drv_err " : "", (gstat & 4) ? "uv_cp" : "");
+      - script.execute: motion_halt
+      - if:
+          condition:
+            lambda: 'return id(cal_active);'
+          then:
+            - script.execute: cal_abort
+      - lambda: |-
+          id(pending_pos) = -1.0f;
+          id(pos_unknown) = true;
+          id(limit_faults) |= 8;
+      - script.execute: position_commit
+      - component.update: limit_fault_text
+      - script.execute: driver_reconfigure
+      - script.execute: driver_confirm
+
+  # Every driver setting, as the driver component's setup and core's boot
+  # configuration (priority 600) write them, with this unit's values.
+  - id: driver_reconfigure
+    mode: single
+    then:
+      - lambda: |-
+          auto *d = id(driver);
+          id(driver_ifcnt_before) = (int) (d->read_register(IFCNT) & 0xFF);
+          d->write_field(PDN_DISABLE_FIELD, true);
+          d->write_field(TEST_MODE_FIELD, false);
+          d->write_field(SHAFT_FIELD, false);
+          d->write_field(MSTEP_REG_SELECT_FIELD, true);
+          d->write_field(INTERNAL_RSENSE_FIELD, false);   // rsense 0.22: external sense resistors
+          d->write_field(I_SCALE_ANALOG_FIELD, false);    // analog_current_scale: false
+          d->write_field(VSENSE_FIELD, false);            // vsense: false
+          d->write_field(DEDGE_FIELD, false);             // INDEX as step feedback (serial control)
+          d->write_field(INDEX_OTPW_FIELD, false);
+          d->write_field(INDEX_STEP_FIELD, true);
+          d->write_field(VACTUAL_FIELD, 0);
+      - tmc2209.configure:
+          direction: !lambda 'return id(global_stepper_direction);'
+          microsteps: 8
+          interpolation: true
+          tcool_threshold: !lambda 'return id(global_tcoolthrs);'
+      - tmc2209.stallguard:
+          threshold: !lambda 'return id(global_sgthrs);'
+      - tmc2209.currents:
+          standstill_mode: freewheeling
+          irun: !lambda 'return id(global_irun);'
+          ihold: 0
+          tpowerdown: 0
+          iholddelay: 0
+      - lambda: 'id(driver)->write_register(GSTAT, 0x07);'
+
+  # Confirm the settings landed before the driver output comes back on: the
+  # status flags clear, the readable registers as written, and IFCNT advanced by
+  # at least the writes made (11 fields, one or more per action, the GSTAT
+  # clear), so the write-only registers were received too.
+  - id: driver_confirm
+    mode: single
+    then:
+      - lambda: |-
+          auto *d = id(driver);
+          const uint32_t gstat = d->read_register(GSTAT) & 0x07;
+          const bool regs = d->read_field(PDN_DISABLE_FIELD) == 1 && d->read_field(MSTEP_REG_SELECT_FIELD) == 1 &&
+                            d->read_field(INDEX_STEP_FIELD) == 1 && d->read_field(I_SCALE_ANALOG_FIELD) == 0 &&
+                            d->read_field(INTERNAL_RSENSE_FIELD) == 0 && d->read_field(MRES_FIELD) == 4 &&
+                            d->read_field(VSENSE_FIELD) == 0;
+          const uint8_t wrote = (uint8_t) (((uint32_t) d->read_register(IFCNT) & 0xFF) - (uint32_t) id(driver_ifcnt_before));
+          const bool landed = wrote >= 11 + 3 + 1;
+          if (gstat == 0 && regs && landed) {
+            if (!id(thermal_lockout)) {
+              id(driver_hold) = false;
+              d->enable(true);
+              ESP_LOGI("driver", "Driver settings re-applied and confirmed - driver output on");
+            } else {
+              ESP_LOGI("driver", "Driver settings re-applied and confirmed - output stays off until the lockout clears");
+            }
+          } else {
+            ESP_LOGE("driver", "Driver settings not confirmed (status 0x%02x, registers %s, %u writes received) - "
+                     "output stays off; retrying", (unsigned) gstat, regs ? "ok" : "differ", (unsigned) wrote);
+          }
