@@ -11,6 +11,7 @@ heater fallback). The default profile follows Daniel's bench note: about four st
 Geometry (old carriage): distances in mm from the S5 trigger; S4 trips at 95.5, the hard stop
 is at 99.1 (recorded as a hard-stop hit). The default unit has learned a 95.5 mm stroke.
 Open-guard profiles: fresh (not learned, booted on S5), fresh-s4-never (S4 never trips),
+fresh-trimmed / fresh-trimmed-s4-never (the same on the trimmed carriage: S4 99.3, stop 101.41),
 fresh-unreferenced (not learned, carriage really 30 mm out while the firmware believes 0),
 fresh-unreferenced-near (the same, 0.4 mm out: a close then ends on S5).
 """
@@ -21,6 +22,7 @@ K_MOVE, K_HEAT = 0.050, 0.012          # °C/s at 600 mA moving / at IHOLD 19 st
 SPM = 3066.6667                         # steps per mm
 BACKOFF_MM = 24_500 / SPM
 S4_MM, HARD_MM, DEFAULT_MM = 95.5, 99.1, 101.0
+TRIMMED_S4_MM, TRIMMED_HARD_MM = 99.3, 101.41   # trimmed carriage (profiles fresh-trimmed*)
 SPEEDS = {"Slow": 1200, "Medium": 2600, "Fast": 5500}
 
 
@@ -29,6 +31,7 @@ class SimDevice:
         self.fault, self.t = fault, 0.0
         self.mac = "02" + "00" * 4 + "01"          # a locally administered, made-up address
         self.commands = []                          # every command received (M1's sabotage)
+        self.buttons_locked = False
         self.k_move = 0.022 if fault == "slow-heat" else K_MOVE
         self.logs, self.events, self.seen = [], [], {}
         self.core = self.sens = 30.0
@@ -36,7 +39,9 @@ class SimDevice:
         f = str(fault or "")
         fresh = f.startswith("fresh")
         self.stroke = None if fresh else S4_MM                  # learned Open stroke (mm)
-        self.s4_mm = None if "s4-never" in f else S4_MM
+        trimmed = "trimmed" in f
+        self.hard_mm = TRIMMED_HARD_MM if trimmed else HARD_MM
+        self.s4_mm = None if "s4-never" in f else (TRIMMED_S4_MM if trimmed else S4_MM)
         self.believed = 0.0 if fresh else 0.3 * S4_MM           # the firmware's position (mm)
         self.offset = {"fresh-unreferenced": 30.0, "fresh-unreferenced-near": 0.4}.get(f, 0.0)  # actual - believed
         self.learning = fresh and self.offset == 0.0            # booted on S5: next open learns
@@ -103,7 +108,7 @@ class SimDevice:
                 "Glasscalibur": round(self.pos, 4), "Speed": self.speed, "Speed Lock": lock_text,
                 "Motor Current": self.current, "Calibration Status": self.cal_status,
                 "StallGuard calibrated": self.calibrated, "Firmware Version": "dev-tp1",
-                "StallGuard Enabled": True, "Vibration Stall Detection": True, "Child Lock": False,
+                "StallGuard Enabled": True, "Vibration Stall Detection": True, "Child Lock": self.buttons_locked,
                 "BENCH heater": self.heat_on, "BENCH heater status": hs,
                 "Open stroke": self.stroke if self.stroke else float("nan"),
                 "Open Limit Switch": self.s4_mm is not None and self.actual >= self.s4_mm,
@@ -159,7 +164,10 @@ class SimDevice:
                 self.cal_status, self.cal_until = "Calibrating...", self.t + 600
 
     async def switch(self, name, on):
-        self.commands.append(("switch", name))
+        self.commands.append(("switch", name, bool(on)))
+        if name == "Child Lock":
+            self.buttons_locked = bool(on)
+            return
         if name == "BENCH heater":
             if on and not self.heat_on and not self.lockout and self.reading < 62:
                 self.heat_on, self.ihold, self.stop_code = True, 19, 0
@@ -265,10 +273,10 @@ class SimDevice:
             sp = SPEEDS[self.cal_speed if self.calibrated else "Fast"]
             step = sp / SPM * dt * (1 if self.state == "OPENING" else -1)
             self.believed += step
-            if self.actual >= HARD_MM:                               # the carriage meets the stop
-                self.believed = HARD_MM - self.offset
+            if self.actual >= self.hard_mm:                               # the carriage meets the stop
+                self.believed = self.hard_mm - self.offset
                 self.hard_hit = True
-                self.log(f"[E][sim]: HARD STOP HIT at {HARD_MM} mm")
+                self.log(f"[E][sim]: HARD STOP HIT at {self.hard_mm} mm")
                 self.halt()
             elif step > 0 and self.s4_mm is not None and self.actual >= self.s4_mm:
                 self.halt()                                          # stops on S4
