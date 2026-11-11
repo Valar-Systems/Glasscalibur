@@ -19,6 +19,9 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   runs until the switch. An open that ends without the open switch shows 99 % with its
   fault and doesn't seek the switch.
 - The motor stops when the unit restarts or an update begins.
+- **After a stall stop**, the next Close or Open runs until its limit switch, so the
+  window closes (or opens) fully in one move; the cover keeps showing the counted
+  position until then.
 
 ### Fixed
 - **Position after a power cut.** The position used to reach flash only once a minute,

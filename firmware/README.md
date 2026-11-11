@@ -185,7 +185,7 @@ Other things you may see:
 | A command does nothing, log `… refused - …`, **Thermal Alert** `refused` | The start gate (see [Motor temperature](#motor-temperature)). | Let the motor cool. STOP always works. A refused scheduled move waits (see below). |
 | **Thermal Lockout** on, four chirps, **Thermal Alert** `lockout` | The motor read 60 °C or more; motion stopped. | Let it cool: it clears below 48 °C (**Thermal Alert** `cleared`). Check the window moves freely. |
 | **Thermal Lockout** on, **Thermal Alert** `sensor_lost` | No valid temperature reading for 15 s. | Check the temperature board and its cable. It clears on a reading below 48 °C. |
-| **Obstruction** event, the window backs off ~8 mm | A stall detector stopped a move. | Clear the path. Repeated stops on a clear path: run **Auto‑Calibrate**. |
+| **Obstruction** event, the window backs off ~8 mm | A stall detector stopped a move. The next Close or Open runs until its limit switch. | Clear the path. Repeated stops on a clear path: run **Auto‑Calibrate**. |
 | **Calibration Status** `FAILED - …` | See above. | Check the track, let the motor cool, run again. The last good calibration stays in use. |
 | **Tamper Detected**, buzzer | The armed unit was moved. | Button 1 click or **Clear Tamper Alert**; **Set Tamper Baseline** after re‑mounting. |
 
@@ -218,7 +218,8 @@ substitutions.
 - **StallGuard** (TMC2209 load sensing) reacts when **StallGuard Enabled** is on (the
   default). **Vibration Stall Detection** (accelerometer) is off until a calibration
   turns it on. A stall outside calibration stops the motor and backs off about 8 mm
-  (24,500 steps); a second stall during that back‑off just stops. **StallGuard
+  (24,500 steps); a second stall during that back‑off just stops. The next Close or
+  Open then runs until its limit switch. **StallGuard
   Auto‑Tune** (off by default) nudges SGTHRS from the vibration evidence.
 - **At least one detector stays on.** Switching **StallGuard Enabled** off while
   **Vibration Stall Detection** is off is refused (it switches back on, with a
