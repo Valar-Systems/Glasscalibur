@@ -259,3 +259,39 @@ Sabotages: the base fails R3.
      Slow: PC1 not run, "Auto-Calibrate at Fast first");
   S3 with 4 minutes of window left, no case starts;
   S4 the push gate passes.
+
+## Amendment 5 — after a stall, the next Close or Open runs to its switch; detector log order (review, 2026-11-11; before the code)
+
+**(e) Daniel may strike this item.** A stall stop can leave the count off: on the bench (EN-2,
+session 2) a stall into a soft block left it 2.12 mm off, the next Close stopped 0.6 mm past the
+counted zero without S5 and faulted, and the window needed a second Close. Now:
+- a new persisted flag `seek_next` is set by `stall_response` (not during calibration, whose legs
+  end on the switches anyway) and cleared by an S5 or S4 press;
+- while it is set, `drive_close` and `drive_open` behave as in the unknown position: a switch that
+  is already pressed settles at once (no move), otherwise the move runs until its switch (at most a
+  full stroke + `seek_margin_mm` from where it starts), and the open doesn't learn;
+- the cover keeps showing the counted position (no 50 %; that stays for the unknown position).
+
+**(f)** The two detector switches (Vibration Stall Detection, StallGuard Enabled) log "... disabled"
+only when they really stay off; a refused switch-off logs only its refusal.
+
+### Checks
+G2 vs #27 at faf47d2: CHANGED exactly `script:stall_response`, `script:drive_open`,
+`script:drive_close`, `binary_sensor:Open Limit Switch :: on_press`, `binary_sensor:Close Limit
+Switch :: on_press`, and `turn_off_action` and `on_turn_off` of both detector switches (9); NEW none;
+DROPPED none. G1 clean. C1 compiles.
+R5 (resolved config):
+- `seek_next` is persisted and starts false;
+- `stall_response` sets it, guarded by "not calibrating";
+- `drive_close` / `drive_open`: the level check and the switch-seeking target both apply when
+  "unknown or seek_next"; the open learns only when neither is set;
+- the S5 and S4 handlers clear it;
+- the cover lambda doesn't read it;
+- neither detector switch logs "disabled" in its turn_off_action; each logs it in on_turn_off's
+  branch where it stays off.
+Sabotages: a head whose `stall_response` doesn't set `seek_next`, one whose S5 handler doesn't clear
+it, and one whose cover lambda shows 50 % for it each fail exactly that fact; the base fails R5.
+
+### Bench, added
+- SN1 Stall a close into a soft block (as in EN-2), remove the block, then one Close: it runs until
+  S5 with no fault; while it closes the cover shows the counted position, not 50 %.
