@@ -22,6 +22,10 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **After a stall stop**, the next Close or Open runs until its limit switch, so the
   window closes (or opens) fully in one move; the cover keeps showing the counted
   position until then.
+- **Driver status.** The unit checks the driver's status flags. If the driver reports a
+  reset, an undervoltage or a fault, the unit stops, re-applies the driver settings and
+  treats the position as unknown. During a thermal lockout the driver output is off; it
+  comes back on only after its settings are confirmed.
 
 ### Fixed
 - **Position after a power cut.** The position used to reach flash only once a minute,

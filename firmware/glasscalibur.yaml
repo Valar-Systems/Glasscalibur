@@ -121,4 +121,5 @@ packages:
   stall: !include packages/stall.yaml
   calibration: !include packages/calibration.yaml
   temperature: !include packages/temperature.yaml
+  driver: !include packages/driver.yaml
   buttons: !include packages/buttons.yaml
