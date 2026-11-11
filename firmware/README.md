@@ -183,8 +183,9 @@ Other things you may see:
 | --- | --- | --- |
 | **Thermal Alert** `warning` | The motor read 50 °C or more. | Moves still run. Check the window moves freely. |
 | A command does nothing, log `… refused - …`, **Thermal Alert** `refused` | The start gate (see [Motor temperature](#motor-temperature)). | Let the motor cool. STOP always works. A refused scheduled move waits (see below). |
-| **Thermal Lockout** on, four chirps, **Thermal Alert** `lockout` | The motor read 60 °C or more; motion stopped. | Let it cool: it clears below 48 °C (**Thermal Alert** `cleared`). Check the window moves freely. |
+| **Thermal Lockout** on, four chirps, **Thermal Alert** `lockout` | The motor read 60 °C or more; motion stopped and the driver output is off. | Let it cool: it clears below 48 °C (**Thermal Alert** `cleared`). Check the window moves freely. |
 | **Thermal Lockout** on, **Thermal Alert** `sensor_lost` | No valid temperature reading for 15 s. | Check the temperature board and its cable. It clears on a reading below 48 °C. |
+| A command does nothing, log `… refused - driver held while its settings are re-applied` | The driver reported a reset, an undervoltage or a fault (the position is then unknown), or a thermal lockout just cleared: the unit is re-applying and confirming the driver settings, with the driver output off. | Wait a moment: it clears by itself once the settings are confirmed. **STOP** always works. |
 | **Obstruction** event, the window backs off ~8 mm | A stall detector stopped a move. The next Close or Open runs until its limit switch. | Clear the path. Repeated stops on a clear path: run **Auto‑Calibrate**. |
 | **Calibration Status** `FAILED - …` | See above. | Check the track, let the motor cool, run again. The last good calibration stays in use. |
 | **Tamper Detected**, buzzer | The armed unit was moved. | Button 1 click or **Clear Tamper Alert**; **Set Tamper Baseline** after re‑mounting. |
@@ -198,7 +199,7 @@ Other things you may see:
 | --- | --- |
 | 50 °C or more | A warning in the log and **Thermal Alert** `warning`, once until a reading below 48 °C. |
 | 55 °C or more | **Start gate:** no new motion starts. Open, Close and Set‑position (web UI, Home Assistant, the API, Button 1, schedules) and Auto‑Calibrate are refused, logged, and announced with **Thermal Alert** `refused`. A move already under way continues. |
-| 60 °C or more | **Thermal lockout:** motion stops (a stall back‑off already under way finishes), a running calibration ends, four chirps, **Thermal Alert** `lockout`, **Thermal Lockout** on. Nothing new starts until a reading below 48 °C clears it (**Thermal Alert** `cleared`). |
+| 60 °C or more | **Thermal lockout:** motion stops (a stall back‑off already under way finishes) and the driver output goes off, a running calibration ends, four chirps, **Thermal Alert** `lockout`, **Thermal Lockout** on. Nothing new starts until a reading below 48 °C clears it (**Thermal Alert** `cleared`); the driver comes back on once its settings are re-applied and confirmed. |
 | No valid reading for 15 s | The same lockout, with **Thermal Alert** `sensor_lost`. Counted from boot; until the first reading after boot, the start gate refuses. |
 
 **STOP** always works. A restart clears the lockout; the start gate still applies.
