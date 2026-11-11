@@ -7,6 +7,9 @@
 # does not fire on cue, so the button runs the stall response on demand. It acts
 # only while the cover is moving and does what the TMC2209 on_stall handler does:
 # stop the motor, then stall_response. The release targets never include it.
+substitutions:
+  firmware_dir: "../../firmware"   # the product's folder, from here
+
 packages:
   glasscalibur: !include ../../firmware/glasscalibur.yaml
 
