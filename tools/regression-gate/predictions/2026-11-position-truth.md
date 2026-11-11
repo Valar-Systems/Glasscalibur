@@ -336,3 +336,29 @@ P6-1 Every pull and plug-in step is recorded as shown and spoken; each countdown
      prints is missing from the record.
 S6   Amendment 4's dry runs (S1-S3, with the guard present) still come out as registered.
 D    The push gate passes.
+
+### Amendment 6 note — when the guard counts as back (2026-11-11; before the code and before any check)
+Found while reading the open guard before writing the code: the guard learns that its connection
+is gone only from the connection's keepalive (a ping every 20 s; it gives up after 90 s without an
+answer, or at once when the unit, powered up again, refuses the old connection). So after a power
+cut its heartbeat can read "connected and watching" on the old connection for up to about 20 s
+after the unit is back. Amendment 6 item 2's "connected and watching again" is therefore taken as:
+- since the call, the heartbeat has read not connected, not watching or stale at least once, and
+- it now reads connected and watching.
+pc_run samples the heartbeat about every 0.2 s from the call until the guard is back (the guard
+reads not connected for at least 2 s when it loses the unit, so a sample can't miss it). If the
+guard isn't back within 60 s of the unit, no recovery move is sent; the case ends, recorded as
+"not run: open guard not connected and watching".
+
+Dry-run guard model (`--sim-guard`):
+- `ok`: reads not connected 2 s after the unit goes off; back 3 s after the unit is.
+- `late`: reads connected through the cut; notices at its first ping after the unit is back
+  (pings every 20 s from the start), then back 3 s later.
+- `missing`: no heartbeat.
+- `drop-in-recovery`: like `ok`, then stale from 3 s into the first move after the first power-up.
+
+I6-3 runs with `ok` and with `late`. "Each recovery move is sent only after the guard is back" is
+judged in the model: at each send, the guard's connection was made after the unit's last power-up.
+Added sabotage I6-3b: with only the plain heartbeat check after power-up (no "since the call"
+condition), the `late` model sends a recovery move while the guard is still on its old
+connection, and I6-3 fails.
