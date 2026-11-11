@@ -313,7 +313,7 @@ cover:
       # (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return id(ota_active) || ${thermal_blocked};'
+            lambda: 'return id(ota_active) || ${thermal_blocked} || id(driver_hold);'
           then:
             - script.execute: thermal_cancel_pending
             - if:
@@ -324,9 +324,17 @@ cover:
                       level: WARN
                       format: "Open refused - firmware update in progress"
                 else:
-                  - script.execute:
-                      id: thermal_refused
-                      what: "Open"
+                  - if:
+                      condition:
+                        lambda: 'return ${thermal_blocked};'
+                      then:
+                        - script.execute:
+                            id: thermal_refused
+                            what: "Open"
+                      else:
+                        - logger.log:
+                            level: WARN
+                            format: "Open refused - driver held while its settings are re-applied"
           else:
             - script.execute: thermal_cancel_pending
             - if:
@@ -342,7 +350,7 @@ cover:
       # (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return id(ota_active) || ${thermal_blocked};'
+            lambda: 'return id(ota_active) || ${thermal_blocked} || id(driver_hold);'
           then:
             - script.execute: thermal_cancel_pending
             - if:
@@ -353,9 +361,17 @@ cover:
                       level: WARN
                       format: "Close refused - firmware update in progress"
                 else:
-                  - script.execute:
-                      id: thermal_refused
-                      what: "Close"
+                  - if:
+                      condition:
+                        lambda: 'return ${thermal_blocked};'
+                      then:
+                        - script.execute:
+                            id: thermal_refused
+                            what: "Close"
+                      else:
+                        - logger.log:
+                            level: WARN
+                            format: "Close refused - driver held while its settings are re-applied"
           else:
             - script.execute: thermal_cancel_pending
             - if:
@@ -371,7 +387,7 @@ cover:
       # (see packages/temperature.yaml).
       - if:
           condition:
-            lambda: 'return id(ota_active) || ${thermal_blocked};'
+            lambda: 'return id(ota_active) || ${thermal_blocked} || id(driver_hold);'
           then:
             - script.execute: thermal_cancel_pending
             - if:
@@ -382,9 +398,17 @@ cover:
                       level: WARN
                       format: "Set position refused - firmware update in progress"
                 else:
-                  - script.execute:
-                      id: thermal_refused
-                      what: "Set position"
+                  - if:
+                      condition:
+                        lambda: 'return ${thermal_blocked};'
+                      then:
+                        - script.execute:
+                            id: thermal_refused
+                            what: "Set position"
+                      else:
+                        - logger.log:
+                            level: WARN
+                            format: "Set position refused - driver held while its settings are re-applied"
           else:
             - script.execute: thermal_cancel_pending
             - if:
