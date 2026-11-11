@@ -305,3 +305,34 @@ switch's `on_turn_off`); DROPPED exactly `switch:StallGuard Enabled :: turn_off_
 R5's last fact reads "neither detector switch logs 'disabled' outside on_turn_off's stays-off
 branch". Disclosed: a G2 run on a partial head (the seek change only, before this) showed the 5
 anchors of that change.
+
+## Amendment 6 — pc_run.py uses the bench interlock and prompts (ruling 46 c, 2026-11-11; before the code)
+
+The power cut stays manual: Daniel pulls the 24 V adapter at the wall. `pc_run.py` now uses #30's
+open-guard interlock and its prompt window with speech (`bench_common.py`, `bench_prompt.py`).
+1. **Interlock.** No move (Open, Close, Set position) is sent and no cut is started unless the open
+   guard's heartbeat is under 2 s old and says connected and watching; otherwise the case isn't run
+   ("open guard not connected and watching") and nothing is sent. While a move is under way outside
+   a cut, a stale or disconnected heartbeat makes the script send STOP and end the case.
+2. **The cut.** From the call until the unit is back, the guard's lost connection is expected: it
+   doesn't stop or end the case. After power-up the script waits (up to 60 s) for the guard to be
+   connected and watching again before the recovery move.
+3. **Prompts.** Every "pull the 24 V adapter" and "plug it back in" step is shown in the prompt window
+   and spoken; the countdown speaks three, two, one and the call, about a second apart; an instrument
+   failure (the unit never went off; it didn't come back) is an alert, shown and spoken. Dry runs
+   record the prompts instead.
+4. The window-end guard, the MAC checks and the PC1-PC6 logic are unchanged.
+
+### Checks (dry run, `pc_sim.py`)
+I6-1 With no guard (`--sim-guard missing`): no case starts, nothing is sent, each case reads "not run:
+     open guard not connected and watching". Sabotage: with the gate bypassed the first move is sent.
+I6-2 The guard drops during a recovery Close (outside a cut): STOP is sent within 2 s and the case ends,
+     recorded. Sabotage: without the in-move check, no STOP.
+I6-3 During every cut the guard's lost connection neither stops nor ends the case, and each recovery move
+     is sent only after the guard is back. Sabotage: without the cut exemption the first cut ends its
+     case.
+P6-1 Every pull and plug-in step is recorded as shown and spoken; each countdown is three, two, one and
+     the call a second apart; the no-drop instrument failure is an alert. Sabotage: a pull step that only
+     prints is missing from the record.
+S6   Amendment 4's dry runs (S1-S3, with the guard present) still come out as registered.
+D    The push gate passes.
