@@ -379,3 +379,42 @@ connection, and I6-3 fails.
   after the unit. `--sim-guard slow-start`: no heartbeat until 10 s into the run, then `ok`.
 - **I6-4.** With `slow-start`, PC2 starts once the heartbeat appears and passes. Sabotage: with no
   wait at case start, PC2 reads not run.
+
+### Amendment 6 results so far (2026-11-11, head 55193d3, local, not pushed): stopped on an unpredicted result
+- **Instrument failure (disclosed, rerun).** The first run (I6-1 on the head) never returned, so
+  there was no reading. Cause, reproduced on its own: `pc_sim`'s `sleep` stopped up to 1e-9 s
+  short of its end without moving the clock. #30's `MoveGate.sleep`, which `pc_run` now waits
+  through, then asked for the remaining 1.8e-15 s in an endless loop. The fix is in the simulator
+  only: `sleep` ends exactly on time. The harness now gives each run 300 s and reports a run with
+  no reading as an instrument failure. The set was rerun on the fixed simulator (in 55193d3).
+- **Rerun, as predicted:**
+  - I6-1 head PASS: each case not run, 0 commands. Sabotage (gate bypassed) FAIL: 16 commands,
+    the first a Speed select.
+  - I6-2 head PASS: STOP 0.20 s after the guard went stale; the case ended and was recorded; no
+    move after it. Sabotage (no in-move check) FAIL: no STOP.
+  - I6-3 head PASS with `ok` and with `late`: 5 cuts, guard lost 5 times, no case stopped or ended
+    by the guard, 11 moves, none on the guard's old connection.
+- **Not as predicted: I6-3a** (sabotage: no cut exemption, guard `ok`).
+  - The predicted part happened: PC2's first cut ended its case ("STOP sent mid-move",
+    INSTRUMENT, 132.4 s).
+  - Then the run ended with an uncaught `GuardLost` in PC3's case-start wait, so the harness got
+    no reading. The report file was written and STOP was sent, but no later case was recorded.
+  - Cause: the case-start wait (note 2) sleeps through the gate's in-move check, outside the
+    per-case handler. The unit was off and its last reported State was OPENING, so the check sent
+    STOP and raised.
+  - The same path exists in the head. A case that ends while the carriage moves, with no STOP of
+    its own, triggers it: `GuardMissing` at a cut's start right after `open_to`, with the carriage
+    still opening. Until the next check, that open runs with the guard not watching.
+- **Not run (stopped here):** I6-3b, P6-1 and its sabotage, I6-4 and its sabotage, S6.
+- **Proposed fix (not made; waits for a ruling):**
+  1. A case that ends on the interlock (`GuardMissing` or `GuardLost`) sends STOP before the next
+     case, as tp1_run.py does.
+  2. The case-start wait sends nothing and sleeps without the in-move check, so it can't raise.
+  - Proposed check I6-5, with a new dry-run model `drop-at-cut` (the heartbeat goes stale as the
+    first cut starts, while the carriage is still opening):
+    - STOP within 1 s of the refusal.
+    - PC2 recorded "not run: open guard not connected and watching".
+    - Every later case recorded (not run). No uncaught exception; the report is complete.
+  - Sabotages: without item 1, no STOP (the open runs on); without item 2, the run ends with an
+    uncaught `GuardLost` as in I6-3a.
+  - Then the full set reruns on the fixed head: I6-1..I6-5, I6-3a/b, P6-1, S6.
