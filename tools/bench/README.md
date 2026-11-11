@@ -11,6 +11,8 @@ Nothing here is ever built by CI, released, or flashed to a customer unit.
 | `tp1_sim.py` | A simulated unit for the script's dry run (`--sim`). |
 | `find_unit.py` | Finds the bench unit's current address by its MAC, confirmed by the unit itself. |
 | `open_guard.py` | Runs in the background until the stroke is learned: stops any open that passes 97 mm (100.5 mm with `--trimmed-carriage`) without S4, or that starts with no S5 reference. |
+| `bench_session.py` | Starts and ends a sitting: records the carriage and the window, turns Child Lock on, restores it at the end. |
+| `bench_common.py`, `bench_prompt.py` | The guard heartbeat and move gate, and the prompt window with speech, used by the scripts above. |
 
 The design and the expected results are in
 [`../regression-gate/predictions/2026-11-tp1-automatic.md`](../regression-gate/predictions/2026-11-tp1-automatic.md).
@@ -49,6 +51,19 @@ Dry run without a unit: `python tools/bench/tp1_run.py --sim`
 `refused-close-no-cancel` are faults the script must report as FAIL).
 
 ## Every sitting
+
+1. Confirm with Daniel which carriage is fitted, then start the sitting:
+   `python tools/bench/bench_session.py start --host <unit address> --mac <MAC> --window-end HH:MM --carriage old|trimmed`.
+   It records the sitting and turns **Child Lock** on (Button 1 can't start a move by accident);
+   `tp1_run.py` turns it off just before its Button 1 step and on again right after.
+2. Start the open guard and leave it running for the whole sitting (below). Every script that
+   moves the unit checks the guard's heartbeat first: no move is sent unless the guard is
+   connected and watching, and if it drops mid-move the script sends STOP. If the unit reboots
+   (a flash, a power cut) the guard reconnects by itself and checks the MAC again.
+3. Prompts that ask Daniel to act, and the guard's alerts, open in a window on top of the screen
+   and are spoken (Windows' built-in voice); the power-cut countdown is spoken.
+4. At the end: `python tools/bench/bench_session.py end --host <unit address> --mac <MAC>`
+   restores Daniel's Child Lock setting.
 
 - At the start, confirm with Daniel which carriage is fitted. Pass `--trimmed-carriage` to
   `open_guard.py` only when the trimmed carriage is in (its guard limit is 100.5 mm; the default,

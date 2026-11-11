@@ -19,8 +19,15 @@ Thresholds: warning 50, gate 55, lockout 60, clear below 48 °C.
 Bench window (--window-end, Pacific time): it doesn't start with under 5 minutes left; when the
 window ends it sends STOP, turns the heater off, puts back what needs no motion (Motor Current)
 and reports the run as INCOMPLETE, naming anything not put back.
+Open guard interlock (bench_common.py): no move is sent unless open_guard.py is connected and
+watching; if it drops mid-move the script sends STOP and ends the run as INCOMPLETE. Prompts to
+Daniel show on top of his screen and are spoken. If Child Lock is on (bench_session.py turns it
+on for the sitting) it is turned off just before the Button 1 step and on again right after.
 """
 import argparse, asyncio, datetime, json, pathlib, re, sys, time, urllib.parse, urllib.request
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from bench_common import GuardLost, GuardMissing, MoveGate, Prompter, guard_ok  # noqa: E402
 
 WARN, GATE, LOCK, CLEAR = 50.0, 55.0, 60.0, 48.0
 BACKSTOP_C, STALE_S = 62.0, 10.0
@@ -75,6 +82,7 @@ E_ALERT, E_OBSTRUCTION, E_COVER = "Thermal Alert", "Obstruction", "Glasscalibur"
 E_SPEED, E_LOCKTEXT, E_CURRENT = "Speed", "Speed Lock", "Motor Current"
 E_CALSTAT, E_CALIBRATED, E_FW = "Calibration Status", "StallGuard calibrated", "Firmware Version"
 E_HEATER, E_HEATSTAT, E_KEEP = "BENCH heater", "BENCH heater status", "BENCH heater keepalive"
+E_CHILD = "Child Lock"
 SNAPSHOT = [E_SPEED, E_LOCKTEXT, E_CURRENT, E_CALSTAT, E_CALIBRATED, "SGTHRS (stall threshold)",
             "TCOOLTHRS", "Vibration Threshold", "StallGuard Enabled", "Vibration Stall Detection",
             "Child Lock"]
@@ -88,7 +96,7 @@ class RealDevice:
     def __init__(self, host):
         self.host, self.t0 = host, time.monotonic()
         self.states, self.events, self.logs, self.keys, self.kinds = {}, [], [], {}, {}
-        self.seen = {}
+        self.seen, self.connected = {}, False
 
     def now(self):
         return time.monotonic() - self.t0
@@ -99,13 +107,17 @@ class RealDevice:
     async def start(self):
         from aioesphomeapi import APIClient, LogLevel
         self.api = APIClient(self.host, 6053, None, client_info="glasscalibur-tp1")
-        await self.api.connect(login=True)
+        await self.api.connect(on_stop=self._on_stop, login=True)
+        self.connected = True
         self.mac = (await self.api.device_info()).mac_address
         infos, _ = await self.api.list_entities_services()
         for i in infos:
             self.keys[i.name], self.kinds[i.key] = i.key, (type(i).__name__, i.name)
         self.api.subscribe_states(self._on_state)
         self.api.subscribe_logs(self._on_log, log_level=LogLevel.LOG_LEVEL_DEBUG)
+
+    async def _on_stop(self, expected_disconnect):
+        self.connected = False
 
     def _on_state(self, st):
         kind, name = self.kinds.get(st.key, ("?", "?"))
@@ -167,6 +179,7 @@ class Run:
         self.heater_used = False
         self.moves_to = {GATE: None, LOCK: None}
         self.snapshot, self.after = {}, {}
+        self.prompt = Prompter(record_only=True)
 
     # --- helpers
     def T(self):
@@ -495,16 +508,25 @@ class Run:
             await self.dev.cover(path, "stop")
             self.check(f"{path} STOP works during the lockout",
                        await self.wait(lambda: self.logged(m, "COVER stop_action"), 3))
-        if self.snapshot.get("Child Lock"):
-            self.rec("Button 1 during the lockout", "NT", "Child Lock is on; left as it is")
-        else:
+        lock_was_on = bool(self.dev.get(E_CHILD))
+        if lock_was_on:
+            await self.dev.switch(E_CHILD, False)
+            await self.dev.sleep(2)
+            self.rec("Child Lock off for the Button 1 step", "INFO", f"Child Lock reads {self.dev.get(E_CHILD)}")
+        try:
             m = self.mark()
-            print("\a\n>>> Daniel: please press Button 1 once now (60 s). <<<\n", flush=True)
+            self.prompt.act("Daniel: press Button 1 once now (within 60 s)",
+                            say="Daniel, please press Button 1 once, now.")
             got = await self.wait(lambda: self.logged(m, "Close refused - thermal lockout"), 60)
             if got:
                 self.rec("Button 1 during the lockout: Close refused", "PASS")
             else:
                 self.rec("Button 1 during the lockout", "NT", "no press within 60 s")
+        finally:
+            if lock_was_on:
+                await self.dev.switch(E_CHILD, True)
+                await self.dev.sleep(2)
+                self.rec("Child Lock back on after the Button 1 step", "INFO", f"Child Lock reads {self.dev.get(E_CHILD)}")
 
     async def cooldown_pending(self, m_lock):
         await self.wait(lambda: (self.T() or 99) < 51.0, 60 * 60, poll=1)
@@ -634,6 +656,8 @@ async def main():
     ap.add_argument("--sim-fault")
     ap.add_argument("--window-end", help="end of the bench window, HH:MM Pacific (required with --host)")
     ap.add_argument("--sim-window-left", type=float, help="sim only: minutes of window left at the start")
+    ap.add_argument("--sim-guard", default="ok",
+                    help="sim only: ok | missing | drop-after-MIN (the open guard's heartbeat in the dry run)")
     ap.add_argument("--out")
     a = ap.parse_args()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -672,12 +696,32 @@ async def main():
         return 3
     await dev.sleep(5)                        # first states
     wdev = Windowed(dev, left)
-    run = Run(wdev, out)
+    prompt = Prompter(record_only=a.sim)
+    events = []
+
+    def on_event(kind, text):
+        events.append((kind, text))
+        prompt.alert(text, say="Bench script: " + ("stop sent, the open guard dropped." if kind == "stop"
+                                                    else "move not sent, the open guard is not watching."))
+    if a.sim:
+        g = a.sim_guard
+        if g == "ok":
+            check = lambda: (True, "sim: guard ok")
+        elif g == "missing":
+            check = lambda: (False, "no heartbeat from the open guard (is open_guard.py running?)")
+        else:
+            t_drop = float(g.split("drop-after-")[1]) * 60.0
+            check = lambda: (dev.now() < t_drop, "sim: the open guard's heartbeat is stale")
+    else:
+        check = guard_ok
+    gdev = MoveGate(wdev, check=check, on_event=on_event)
+    run = Run(gdev, out)
+    run.prompt = prompt
     try:
         try:
             await run.run()
             await run.restore()
-        except WindowOver:
+        except (WindowOver, GuardMissing, GuardLost) as why:
             wdev.off = True
             await dev.cover("api", "stop")
             if dev.get(E_HEATER):
@@ -688,13 +732,17 @@ async def main():
                 back.append("Motor Current")
             if s and dev.get(E_SPEED) != s.get(E_SPEED):
                 not_back.append(f"Speed ({s.get(E_SPEED)}) and a calibration at it")
-            run.rec("bench window ended", "INCOMPLETE",
+            reason = "bench window ended" if isinstance(why, WindowOver) else str(why)
+            run.rec(reason, "INCOMPLETE",
                     "STOP sent; heater off; put back: " + (", ".join(back) or "nothing needed")
                     + "; NOT put back: " + (", ".join(not_back) or "nothing"))
     finally:
         if dev.get(E_HEATER):
             await dev.switch(E_HEATER, False)
         result = run.report()
+        (out / "tp1-prompts.json").write_text(json.dumps({"prompts": prompt.sent, "guard": events}, indent=1),
+                                              encoding="utf-8")
+        prompt.close()
         await dev.close()
     return 0 if result == "PASS" else 1
 
