@@ -54,6 +54,15 @@ globals:
     restore_value: yes
     initial_value: 'false'
 
+  # Set by a stall stop (stall_response): the count may be off by what the motor
+  # slipped, so the next Close or Open runs to its switch (as when the position is
+  # unknown) while the cover keeps showing the counted position. Cleared by an S5
+  # or S4 press.
+  - id: seek_next
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+
   # A set position asked for while the position was unknown: the unit closes to
   # S5 first, then goes there (the S5 handler). -1 = none.
   - id: pending_pos
@@ -675,7 +684,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(pos_unknown) && id(limit_switch_1).state;'
+            lambda: 'return (id(pos_unknown) && id(limit_switch_1).state) || (id(seek_next) && id(limit_switch_1).state);'
           then:
             # Position unknown but S4 is already pressed (its level): the carriage is
             # at S4. Settle at the learned stroke; start no move.
@@ -685,6 +694,7 @@ script:
                 id(driver)->report_position(stroke);
                 id(driver)->set_target(stroke);
                 id(pos_unknown) = false;
+                id(seek_next) = false;
                 id(limit_faults) &= ~8;
                 ESP_LOGI("limit", "Open with the position unknown: S4 already pressed - fully open, no move");
             - script.execute: motion_halt      # IDLE, and the position is committed
@@ -695,7 +705,7 @@ script:
                 id(vib_run_peak) = 0.0f;          // reset per-travel stall cross-check state
                 id(sg_fired_this_move) = false;
                 id(stall_release_active) = false; // a new move gets its own stall release
-                id(learn_this_open) = id(homed_fresh) && !id(pos_unknown);
+                id(learn_this_open) = id(homed_fresh) && !id(pos_unknown) && !id(seek_next);
                 id(homed_fresh) = false;
                 id(open_to_end) = true;
                 id(close_to_end) = false;
@@ -703,6 +713,9 @@ script:
                 const float spm = ${steps_per_mm};
                 if (id(pos_unknown))
                   ESP_LOGW("limit", "Position unknown: opening until S4 (at most the stroke + %.1f mm)",
+                           ${seek_margin_mm});
+                else if (id(seek_next))
+                  ESP_LOGW("limit", "After a stall: opening until S4 (at most the stroke + %.1f mm)",
                            ${seek_margin_mm});
                 const int32_t learned = id(open_stroke_steps);
                 if (learned > 0) {
@@ -727,8 +740,9 @@ script:
                 target: !lambda |-
                   const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
                                                                   : (int32_t) (${open_default_mm} * ${steps_per_mm});
-                  // Position unknown: until S4, at most a full stroke + seek_margin_mm from here.
-                  if (id(pos_unknown))
+                  // Position unknown, or after a stall: until S4, at most a full stroke +
+                  // seek_margin_mm from here.
+                  if (id(pos_unknown) || id(seek_next))
                     return id(driver)->current_position + stroke + (int32_t) (${seek_margin_mm} * ${steps_per_mm});
                   return id(open_stroke_steps) > 0
                       ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
@@ -744,7 +758,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(pos_unknown) && id(limit_switch_2).state;'
+            lambda: 'return (id(pos_unknown) && id(limit_switch_2).state) || (id(seek_next) && id(limit_switch_2).state);'
           then:
             # Position unknown but S5 is already pressed (its level, not a press
             # edge): the carriage is at S5. Settle here; start no move.
@@ -752,6 +766,7 @@ script:
             - stepper.set_target: { id: driver, target: 0 }
             - lambda: |-
                 id(pos_unknown) = false;
+                id(seek_next) = false;
                 id(limit_faults) &= ~8;
                 id(homed_fresh) = true;
                 ESP_LOGI("limit", "Close with the position unknown: S5 already pressed - closed, no move");
@@ -771,6 +786,9 @@ script:
                 if (id(pos_unknown))
                   ESP_LOGW("limit", "Position unknown: closing until S5 (at most the stroke + %.1f mm) "
                            "from %d steps", ${seek_margin_mm}, (int) id(driver)->current_position);
+                else if (id(seek_next))
+                  ESP_LOGW("limit", "After a stall: closing until S5 (at most the stroke + %.1f mm) "
+                           "from %d steps", ${seek_margin_mm}, (int) id(driver)->current_position);
             - globals.set:
                 id: global_state
                 value: "2"
@@ -781,7 +799,7 @@ script:
             - stepper.set_target:
                 id: driver
                 target: !lambda |-
-                  if (id(pos_unknown)) {
+                  if (id(pos_unknown) || id(seek_next)) {
                     const int32_t stroke = id(open_stroke_steps) > 0 ? id(open_stroke_steps)
                                                                     : (int32_t) (${open_default_mm} * ${steps_per_mm});
                     return id(driver)->current_position - stroke - (int32_t) (${seek_margin_mm} * ${steps_per_mm});

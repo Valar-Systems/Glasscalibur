@@ -169,6 +169,7 @@ binary_sensor:
               # S4 is pressed: the position is known again (fully open).
               - lambda: |-
                   id(pos_unknown) = false;
+                  id(seek_next) = false;
                   id(limit_faults) &= ~8;
               - script.execute: position_commit
               - component.update: open_stroke_sensor
@@ -229,6 +230,7 @@ binary_sensor:
               # S5 is pressed: the position is known again (closed); motion_halt saves it.
               - lambda: |-
                   id(pos_unknown) = false;
+                  id(seek_next) = false;
                   id(limit_faults) &= ~8;
               - script.execute: motion_halt     # firmware stop: never ends a calibration
               - logger.log: "LIMIT 2 PRESSED"
