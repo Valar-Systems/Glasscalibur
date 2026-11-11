@@ -295,3 +295,13 @@ it, and one whose cover lambda shows 50 % for it each fail exactly that fact; th
 ### Bench, added
 - SN1 Stall a close into a soft block (as in EN-2), remove the block, then one Close: it runs until
   S5 with no fault; while it closes the cover shows the counted position, not 50 %.
+
+### Amendment 5, note (appended before G2 ran on a valid head)
+The StallGuard Enabled switch's `turn_off_action` held only its "disabled" log line, so moving that
+line into `on_turn_off`'s stays-off branch leaves the action empty, which ESPHome rejects; the key is
+removed. G2 re-registered: CHANGED exactly the 8 others (stall_response, drive_open, drive_close,
+both limit-switch handlers, the vibration switch's `turn_off_action` and `on_turn_off`, the StallGuard
+switch's `on_turn_off`); DROPPED exactly `switch:StallGuard Enabled :: turn_off_action`; NEW none.
+R5's last fact reads "neither detector switch logs 'disabled' outside on_turn_off's stays-off
+branch". Disclosed: a G2 run on a partial head (the seek change only, before this) showed the 5
+anchors of that change.
