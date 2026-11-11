@@ -463,3 +463,32 @@ a scenario where it can fire:
   "STOP first, then the record" is checked by order, not only by time.
 - **Full rerun on one head.** I6-1 to I6-6, I6-3a, I6-3b, P6-1, I6-4 and S6, each with its
   sabotage.
+
+### Amendment 6 results — full set on one head (ruling 47), d0bd766, 2026-11-11: 26/26 as predicted
+- I6-1: head PASS (each case not run, 0 commands); sabotage, gate bypassed: FAIL (20 commands).
+- I6-2: head PASS (STOP 0.20 s after the guard went stale; case ended and recorded); sabotage, no
+  in-move check: FAIL (first STOP 118.6 s later).
+- I6-3: head PASS with `ok` and with `late` (5 cuts, guard lost 5 times, none stopped or ended a
+  case, 11 moves, 0 on the guard's old connection).
+  - I6-3a (no cut exemption): FAIL, as predicted. PC2 ended at its first cut; PC3, PC5 and PC6
+    were recorded "guard missing"; no uncaught exception.
+  - I6-3b (plain check after power-up, `late`): FAIL. 2 moves were sent on the guard's old
+    connection, the first a Close at 153.4 s.
+- I6-4: head PASS (PC2 started at 16.0 s, after the heartbeat appeared); sabotage, no wait: FAIL
+  (PC2 not run).
+- I6-5: head PASS (STOP 0.00 s after the refused cut, before PC3's record; PC5 and PC6 guard
+  missing; nothing sent after; clean exit); sabotage, no STOP on an interlock end: FAIL (no STOP).
+- I6-6: head PASS (PC3, PC5 and PC6 guard missing; 0 sends after PC2's record; clean exit).
+  - Sabotage (a), case-start wait through the in-move check: FAIL (3 sends, the first a STOP).
+  - Sabotage (b), refusal ends the run: FAIL (PC5 and PC6 unrecorded).
+- P6-1: head PASS (5 countdowns, 5 pull calls, 5 plug-ins, all shown and spoken; three-two-one and
+  the call a second apart; the no-drop alert shown and spoken, no plug-in prompt); sabotage, the
+  pull step only prints: FAIL (0 pull calls recorded).
+- S6: as registered.
+  - S1: Fast PC1 PASS; Slow PC2-PC6 PASS.
+  - S2: no-drop gives an instrument failure with STOP and no plug-in prompt; stays-known gives
+    PC1 FAIL; pc6-late: run 1 is not a result and run 2 counts; wrong-mac sends nothing;
+    speed-locked: PC1 not run, Auto-Calibrate at Fast first.
+  - S3: with 4 min left, no case starts.
+- Disclosed earlier and accepted (ruling 47): the simulator sleep fix, the 300 s per-run timeout,
+  the "guard back" definition (e4d40e3), and the I6-5 scenario refinement (note 3, ec66a0e).
