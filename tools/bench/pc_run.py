@@ -15,7 +15,9 @@ the recovery move's log lines and reported beside the last position the unit rep
 
 Open guard interlock (bench_common.py, Amendment 6): no case starts, no cut starts and no move is
 sent unless open_guard.py is connected and watching; outside a cut, if the guard drops while a
-move is under way the script sends STOP and ends the case. From the call until the unit and the
+move is under way the script sends STOP and ends the case. A case that ends on the interlock sends
+STOP first, then is recorded. Each case waits up to 30 s for the guard before it sends anything;
+without it only that case is not run, and the next case waits again. From the call until the unit and the
 guard are back, the guard's lost connection is expected. The guard counts as back once its
 heartbeat has read not connected (or stale) since the call and reads connected and watching
 again, since a guard still on its old connection can read connected for a while after the unit
@@ -244,23 +246,35 @@ class Run:
     # --- the open guard (Amendment 6)
     async def guard_ready(self, case, timeout=30):
         """Before a case sends anything: wait (up to 30 s) for the guard to be connected and
-        watching; if it isn't, the case is not run and nothing is sent."""
+        watching. The wait sends nothing and sleeps without the in-move check; if the guard isn't
+        there, only this case is not run (ruling 47)."""
         end = self.dev.now() + timeout
-        while True:
-            ok, why = self.dev.guard_now()
-            if ok:
-                self.guard_alerted = False
-                return True
-            if self.dev.now() >= end:
-                break
-            await self.guard()
-            await self.dev.sleep(0.5)
-        self.rec(case, "start", "NOT RUN", f"open guard not connected and watching ({why}); nothing sent")
+        try:
+            while True:
+                ok, why = self.dev.guard_now()
+                if ok:
+                    self.guard_alerted = False
+                    return True
+                if self.dev.now() >= end:
+                    break
+                await self.guard()
+                await self.dev.raw.sleep(0.5)
+        except (GuardMissing, GuardLost) as e:          # no guard exception ends the run
+            why = str(e)
+        self.rec(case, "start", "NOT RUN", f"guard missing: open guard not connected and watching ({why}); "
+                 "nothing sent")
         if not self.guard_alerted:
             self.guard_alerted = True
             self.prompt.alert(f"Power cuts not started: the open guard isn't connected and watching ({why}).",
                               say="Power cut script: not started. The open guard is not watching.")
         return False
+
+    async def stop_first(self):
+        """A case that ends on the interlock sends STOP first, then is recorded (ruling 47)."""
+        try:
+            await self.dev.raw.cover("stop")
+        except Exception:
+            pass                                    # the unit may be off
 
     def begin_cut(self):
         """From the call on: the guard's lost connection is expected (no in-move check), and the
@@ -284,8 +298,9 @@ class Run:
                 self.rec(case, "open guard", "INFO", "back (reconnected since the cut): watching")
                 return True
             await self.dev.sleep(0.2)
+        await self.stop_first()
         self.rec(case, "open guard", "NOT RUN", "open guard not connected and watching: not back within 60 s "
-                 "of the unit, so no recovery move was sent; the case ended")
+                 "of the unit, so no recovery move was sent; STOP sent, the case ended")
         self.prompt.alert("The open guard is not back after the power cut: no recovery move sent, case ended.",
                           say="Power cut script: the open guard is not back. Case ended.")
         return False
@@ -544,10 +559,12 @@ class Run:
                     self.rec(case, "start", "INFO", f"speed {CASE_SPEED[case] or 'any'}")
                     await table[case](case)
                 except GuardMissing as why:
+                    await self.stop_first()
                     self.rec(case, "open guard", "NOT RUN", f"open guard not connected and watching - {why}; "
-                             "nothing more sent in this case")
+                             "STOP sent, the case ended")
                 except GuardLost as why:
-                    self.rec(case, "open guard", "INSTRUMENT", f"{why}; the case ended (may be rerun)")
+                    await self.stop_first()
+                    self.rec(case, "open guard", "INSTRUMENT", f"{why}; STOP sent again, the case ended (may be rerun)")
                 finally:
                     self.end_cut()
         except WindowOver:
@@ -599,7 +616,7 @@ async def main():
     ap.add_argument("--sim-cal", default="Slow")
     ap.add_argument("--sim-window-left", type=float, help="sim only: minutes of window left at the start")
     ap.add_argument("--sim-guard", default="ok",
-                    help="sim only: ok | late | missing | drop-in-recovery | slow-start (the open guard in the dry run)")
+                    help="sim only: ok | late | missing | drop-in-recovery | slow-start | drop-at-cut (the open guard in the dry run)")
     ap.add_argument("--out")
     a = ap.parse_args()
     cases = [c.strip().upper() for c in a.cases.split(",") if c.strip()]

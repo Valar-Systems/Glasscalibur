@@ -9,14 +9,15 @@ adapter drains, the unit drops off the network, and boots a few seconds after he
 
 Faults (--sim-fault): no-drop (USB still powers the unit: it never goes off), stays-known (the
 old position comes back after a cut), pc6-late (the first PC6 cut comes after S5 has released),
-wrong-mac, speed-locked (calibrated at Slow).
+wrong-mac, speed-locked (calibrated at Slow), no-return (the unit doesn't come back after the
+plug-in).
 
 The open guard (--sim-guard, Amendment 6 note): ok (its heartbeat reads not connected 2 s after
 the unit goes off, and connected again 3 s after the unit is back), late (it reads connected
 through a cut and notices only at its first keepalive ping after the unit is back, pings every
 20 s, then is back 3 s later), missing (no heartbeat), drop-in-recovery (like ok, then stale from
 3 s into the first move after the first power-up), slow-start (no heartbeat until 10 s into the
-run, then ok). A Restart closes the connection, so the guard notices it at once. Every move records whether the guard's connection at the send was made after
+run, then ok), drop-at-cut (stale from 5 s after the script's first STOP, and stays stale). A Restart closes the connection, so the guard notices it at once. Every move records whether the guard's connection at the send was made after
 the unit's last power-up."""
 import math
 SPM = 3066.6667
@@ -114,7 +115,8 @@ class SimDevice:
                     self.pc6_cuts += 1
         elif text.startswith("PLUG THE 24 V ADAPTER"):
             self.calls.append(("prompt", "plug"))
-            self.plug_at = self.t + 1.0
+            if self.fault != "no-return":
+                self.plug_at = self.t + 1.0
 
     pc6_next = False                       # set by the script around a PC6 cut (sim only)
 
@@ -156,6 +158,8 @@ class SimDevice:
         self.calls.append(("cover", cmd, pos))
         if cmd == "stop":
             self.timed.append((self.t, "stop"))
+            if self.guard == "drop-at-cut" and self.g_stale_from is None:
+                self.g_stale_from = self.t + 5.0
         else:
             fresh = self.guard_check()[0] and self.g_since >= self.booted_at
             self.moves.append((self.t, cmd, fresh, self.cut_boots))
