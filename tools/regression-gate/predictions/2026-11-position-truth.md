@@ -512,3 +512,10 @@ A line shown or spoken before a cue contains none of the action words "pull", "u
 - The full Amendment 6 set reruns on the new head (I6-1 to I6-6, I6-3a/b, P6-1, I6-4, S6, each with its
   sabotage), with the results as registered.
 - D: the push gate passes.
+
+### Amendment 7 results (2026-11-12, head bca384b): 28/28 as predicted
+- P7-1: head PASS. No prompt that isn't a cue has an action word, shown or spoken. All 5 pull cues have
+  them.
+- P7-1 sabotage (a countdown line says "pull"): FAIL, 15 lines flagged, the first "Get ready to pull: 3".
+- The full Amendment 6 set on the same head came out as registered: I6-1 to I6-6, I6-3a and its reading,
+  I6-3b, P6-1 (the countdown found by its new text), I6-4 and S6, each with its sabotage.
