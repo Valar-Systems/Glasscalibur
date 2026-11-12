@@ -101,3 +101,13 @@ upload over the network, as users update (no erase). The MAC is checked before e
 - **BL2.** Switch Button Lock OFF, then restart the board twice, from the web page's Restart button. Each
   time, predicted: Button Lock reads OFF and there is no carry-over line. The carry-over never applies
   again.
+
+## Amendment 1 results: bench, 2026-11-12, all as predicted
+Open set, motor unplugged. The board was identified by its USB serial from the port listing before anything was
+opened, and its MAC was checked over the API before every command. Every update was an OTA upload. The firmware is
+6b93c94's (unchanged since). The board's boot was captured in its USB log each time.
+- BL-C: from the 2.2.0 bench build with Child Lock OFF -> Button Lock OFF, no carry-over line.
+- Child Lock set ON on 2.2.0. Sabotage (this PR's build without the carry-over step) -> Button Lock OFF.
+- BL1: this PR's build -> Button Lock ON; the carry-over line appears once.
+- BL2: Button Lock switched OFF, then two restarts (the Restart button) -> OFF both times, no carry-over line.
+- Ended on the 2.2.0 bench build, which reads Child Lock OFF (the old setting was written OFF by the carry-over).
