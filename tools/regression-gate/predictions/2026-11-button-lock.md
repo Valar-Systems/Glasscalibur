@@ -63,3 +63,25 @@ any code. Base: main `96674ca`. Branch `fw/button-lock`, a draft PR that merges 
 - Sabotage: a local build without the carry-over step. From Child Lock ON, Button Lock comes up OFF.
 - Note: an ESPHome version that changes how preference keys are made (ESPHome describes a planned second
   key scheme) must re-check the carry-over before it ships.
+
+## Results (2026-11-12, head 6b93c94)
+- **C1** `esphome config` valid; compile succeeds (flash 70.8 %, 1,299,896 bytes); the bench build resolves.
+- **G1** as predicted: one row removed (switch "Child Lock", config), one added (switch "Button Lock", config,
+  `button_lock`).
+- **G2** as predicted:
+  - CHANGED `binary_sensor:Button 1 :: on_multi_click`;
+  - DROPPED the old switch's `turn_on_action` and `turn_off_action`;
+  - NEW the new switch's two actions and `esphome:on_boot :: -110.0`.
+- **R7** head 5/5; the base fails all 5.
+  - The wrong-key head fails fact 3; the head without the write of `false` fails fact 5.
+  - The head without the check fails fact 4, and also fact 5. Fact 5 looks inside the conditional branch,
+    which that sabotage removes. The registered text named fact 4 and did not say "only".
+- **BT** 4/4 as predicted.
+  - With the simulated unit presenting "Child Lock" or "Button Lock", the sitting's start and end and
+    TP-1's Button 1 step switched that lock and no other.
+  - Each one-name sabotage failed on the other name ("the unit reports neither …").
+- **D1** 66 entities, 66 reference rows; the "Button Lock" row present, no "Child Lock" row; links resolve.
+  The dropped-row sabotage is reported.
+- Item 3's wording: the CHANGELOG uses Home Assistant's default entity IDs, `switch.glasscalibur_…` (the
+  device's friendly name is "Glasscalibur"), not the `glasscalibur_xxxxxx` form written in item 3.
+- **Bench** BL1/BL2 and their sabotage: not yet run (Daniel present; the open set is enough).
