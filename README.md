@@ -45,7 +45,11 @@ All of these come from the firmware in [`firmware/`](firmware):
 - **Learned open limit** — the unit learns where its open switch triggers and opens
   to just past it; the **Open stroke** sensor shows the learned distance.
 - **Limit-switch faults** — an open or close that reaches its end without the switch
-  stops there and reports it on the **Fault** sensor.
+  stops there and reports it on the **Fault** sensor. The unit shows closed or fully
+  open only while that end's switch is pressed.
+- **Position after a power cut** — the position is saved at every stop; after a move
+  cut off by a power cut it shows as unknown (50 %) until the next Close or Open reaches
+  a switch.
 - **Stall detection** — the TMC2209's StallGuard and an accelerometer vibration
   check stop the motor when the window jams, then back it off about 8 mm. Each stop
   fires an **Obstruction** event Home Assistant can trigger on. At least one of the
@@ -59,7 +63,7 @@ All of these come from the firmware in [`firmware/`](firmware):
   moved and sounds the buzzer.
 - **Child Lock** — makes the unit's own button ignore presses; the web UI, Home
   Assistant and schedules keep working.
-- **Position across reboots** — the position is saved while moving and at every
+- **Position across reboots** — the position is saved at every stop and at every
   restart, including the restart at the end of a firmware update.
 - **Updates over the air** — the **Update Firmware (GitHub)** button installs the
   latest release; the motor stops when an update begins.

@@ -236,7 +236,6 @@ switch:
       - globals.set:
           id: vib_loud_count
           value: "0"
-      - logger.log: "Vibration stall detection disabled"
     # Interlock: never both detectors off.
     on_turn_off:
       - if:
@@ -247,6 +246,8 @@ switch:
                 level: WARN
                 format: "Vibration Stall Detection stays on - StallGuard is off, and one stall detector must stay on"
             - switch.turn_on: vib_enabled
+          else:
+            - logger.log: "Vibration stall detection disabled"
 
   # Master enable for the TMC2209 StallGuard *handler*. The chip's SGTHRS is
   # always set to the user's chosen value (via the SGTHRS number entity), so
@@ -268,8 +269,6 @@ switch:
     restore_mode: RESTORE_DEFAULT_ON
     turn_on_action:
       - logger.log: "StallGuard handler enabled"
-    turn_off_action:
-      - logger.log: "StallGuard handler disabled"
     # Interlock: never both detectors off.
     on_turn_off:
       - if:
@@ -280,6 +279,8 @@ switch:
                 level: WARN
                 format: "StallGuard stays on - Vibration Stall Detection is off, and one stall detector must stay on"
             - switch.turn_on: stallguard_enabled
+          else:
+            - logger.log: "StallGuard handler disabled"
 
   # Self-healing StallGuard tune. When ON (and StallGuard + Vibration Stall
   # Detection are both on), the firmware cross-checks every StallGuard trip against
@@ -410,6 +411,9 @@ script:
           id(homed_fresh) = false;
           id(open_to_end) = false;
           id(close_to_end) = false;
+          // The count may be off by what the motor slipped: the next Close or Open
+          // runs to its switch (seek_next; calibration legs end on the switches).
+          if (!id(cal_active)) id(seek_next) = true;
       - if:
           condition:
             lambda: 'return !id(cal_active) && !id(stall_release_active);'

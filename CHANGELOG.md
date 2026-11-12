@@ -9,6 +9,34 @@ sensor). Local/branch builds report `dev`.
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.3.0] - unreleased
+
+### Changed
+- **The limit switches decide the ends.** The cover shows closed only while the close
+  switch is pressed and fully open only while the open switch is pressed, at startup
+  and after every move; otherwise it stays within 1-99 %. A close that ends without
+  the close switch keeps its fault and makes the position unknown, so the next Close
+  runs until the switch. An open that ends without the open switch shows 99 % with its
+  fault and doesn't seek the switch.
+- The motor stops when the unit restarts or an update begins.
+- **After a stall stop**, the next Close or Open runs until its limit switch, so the
+  window closes (or opens) fully in one move; the cover keeps showing the counted
+  position until then.
+
+### Fixed
+- **Position after a power cut.** The position used to reach flash only once a minute,
+  so a power cut or an unplanned restart mid-move (or within a minute of a stop) could
+  bring back an old position, even "closed" with the window partly open. It is now
+  written at every stop, and a move-in-progress marker is written before each move and
+  cleared at its stop; nothing is written while moving. A cut-off move, or a saved end
+  whose switch isn't pressed, makes the position unknown: the cover shows 50 %, Fault
+  shows *position unknown - close or open fully*, the next Close runs until the close
+  switch (at most a full stroke + 2 mm) and the next Open until the open switch, and a
+  Set position closes to the close switch first.
+- **Settings saved while idle.** Settings changed while the motor is idle reach flash
+  within 30 s (was up to 60 s, at any time); one changed during a move is saved at its
+  stop.
+
 ## [2.2.0] - unreleased
 
 ### Added
@@ -219,7 +247,8 @@ auto-calibration sequence) live in the product layer.
 - Wi-Fi provisioning with no hardcoded credentials (fallback hotspot + captive
   portal, Improv over USB serial).
 
-[2.2.0]: https://github.com/Valar-Systems/Glasscalibur/compare/v2.1.0...main
+[2.3.0]: https://github.com/Valar-Systems/Glasscalibur/compare/v2.2.0...main
+[2.2.0]: https://github.com/Valar-Systems/Glasscalibur/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.0.0
 [1.2.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.2.0
