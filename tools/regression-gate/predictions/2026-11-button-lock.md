@@ -85,3 +85,19 @@ any code. Base: main `96674ca`. Branch `fw/button-lock`, a draft PR that merges 
 - Item 3's wording: the CHANGELOG uses Home Assistant's default entity IDs, `switch.glasscalibur_…` (the
   device's friendly name is "Glasscalibur"), not the `glasscalibur_xxxxxx` form written in item 3.
 - **Bench** BL1/BL2 and their sabotage: not yet run (Daniel present; the open set is enough).
+
+## Amendment 1 — the bench steps and the CHANGELOG wording (ruling 52 a, 2026-11-12; before the bench)
+The CHANGELOG writes the IDs as the user sees them: `switch.<your device>_child_lock` becomes
+`switch.<your device>_button_lock`. This replaces the form in item 3.
+
+The bench replaces BL1/BL2 above. Open set, motor unplugged, nothing moves. Every update is an OTA
+upload over the network, as users update (no erase). The MAC is checked before every command. In order:
+- **BL-C (control).** From the 2.2.0 bench build with Child Lock OFF, update to this PR's bench build.
+  Predicted: Button Lock reads OFF and there is no carry-over line.
+- **Back to 2.2.0** (OTA), then set Child Lock ON.
+- **Sabotage.** Update to a build of this PR without the carry-over step. Predicted: Button Lock reads OFF.
+- **BL1.** Update to this PR's bench build. Predicted: Button Lock reads ON, and the log has the
+  carry-over line.
+- **BL2.** Switch Button Lock OFF, then restart the board twice, from the web page's Restart button. Each
+  time, predicted: Button Lock reads OFF and there is no carry-over line. The carry-over never applies
+  again.
