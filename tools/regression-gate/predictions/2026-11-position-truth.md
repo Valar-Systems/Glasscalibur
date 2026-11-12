@@ -492,3 +492,23 @@ a scenario where it can fire:
   - S3: with 4 min left, no case starts.
 - Disclosed earlier and accepted (ruling 47): the simulator sleep fix, the 300 s per-run timeout,
   the "guard back" definition (e4d40e3), and the I6-5 scenario refinement (note 3, ec66a0e).
+
+## Amendment 7 — prompt wording (ruling 49 a, 2026-11-12; before the code)
+A line shown or spoken before a cue contains none of the action words "pull", "unplug" or "now"
+(whole words, any case). Only the cue itself carries them.
+- The countdown lines change from "Get ready to pull the 24 V adapter from the wall: N" to "Power cut: N".
+  They are still spoken "three", "two", "one", a second apart.
+- The standby line ("Power cut next: stand by the 24 V adapter at the wall", spoken "Power cut next.
+  Stand by the adapter.") already has none of them and is unchanged.
+- The cue "PULL THE 24 V ADAPTER FROM THE WALL NOW" is unchanged. The plug-in prompt is a cue of its own
+  (nothing counts down to it) and is unchanged.
+- Instrument: the dry-run harness finds the countdown by its new text ("Power cut: N"). P6-1's checks are
+  otherwise unchanged.
+
+### Checks (dry run)
+- P7-1: in the prompt record of a dry run with cuts (`--sim-guard ok`, PC2,PC3,PC5,PC6), every prompt
+  that is not a cue (shown text and spoken text) contains none of the action words, and every pull cue
+  does. Sabotage: a countdown line that says "pull" fails P7-1.
+- The full Amendment 6 set reruns on the new head (I6-1 to I6-6, I6-3a/b, P6-1, I6-4, S6, each with its
+  sabotage), with the results as registered.
+- D: the push gate passes.
