@@ -341,7 +341,7 @@ script:
   #      abort via cal_abort) re-enables BOTH detectors — ship-safe posture.
   #
   # Abort: the cover's STOP from any source — web UI, Home Assistant, the API,
-  # Button 1 single-click (checked BEFORE Child Lock: stopping an autonomous
+  # Button 1 single-click (checked BEFORE Button Lock: stopping an autonomous
   # multi-travel sequence is a safety control, never lockable) — or a user
   # Open / Close / Set-position. All of them go through cal_abort.
   # ===========================================================================

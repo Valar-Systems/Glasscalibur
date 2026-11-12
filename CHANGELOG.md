@@ -9,6 +9,15 @@ sensor). Local/branch builds report `dev`.
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.3.0] - unreleased
+
+### Changed
+- **Button Lock** (was **Child Lock**). The switch that makes the unit's own
+  button ignore presses is renamed. Its entity ID changes from
+  `switch.glasscalibur_child_lock` to `switch.glasscalibur_button_lock` (Home
+  Assistant's default IDs): update any automation or dashboard that uses it. The
+  setting carries over: a unit with Child Lock on comes up with Button Lock on.
+
 ## [2.2.0] - unreleased
 
 ### Added

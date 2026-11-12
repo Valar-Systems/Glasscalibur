@@ -21,13 +21,14 @@ window ends it sends STOP, turns the heater off, puts back what needs no motion 
 and reports the run as INCOMPLETE, naming anything not put back.
 Open guard interlock (bench_common.py): no move is sent unless open_guard.py is connected and
 watching; if it drops mid-move the script sends STOP and ends the run as INCOMPLETE. Prompts to
-Daniel show on top of his screen and are spoken. If Child Lock is on (bench_session.py turns it
-on for the sitting) it is turned off just before the Button 1 step and on again right after.
+Daniel show on top of his screen and are spoken. If the button lock is on (Button Lock, or Child
+Lock on 2.2.0; bench_session.py turns it on for the sitting) it is turned off just before the Button 1
+step and on again right after.
 """
 import argparse, asyncio, datetime, json, pathlib, re, sys, time, urllib.parse, urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from bench_common import GuardLost, GuardMissing, MoveGate, Prompter, guard_ok  # noqa: E402
+from bench_common import LOCK_NAMES, GuardLost, GuardMissing, MoveGate, Prompter, guard_ok, lock_name  # noqa: E402
 
 WARN, GATE, LOCK, CLEAR = 50.0, 55.0, 60.0, 48.0
 BACKSTOP_C, STALE_S = 62.0, 10.0
@@ -82,10 +83,9 @@ E_ALERT, E_OBSTRUCTION, E_COVER = "Thermal Alert", "Obstruction", "Glasscalibur"
 E_SPEED, E_LOCKTEXT, E_CURRENT = "Speed", "Speed Lock", "Motor Current"
 E_CALSTAT, E_CALIBRATED, E_FW = "Calibration Status", "StallGuard calibrated", "Firmware Version"
 E_HEATER, E_HEATSTAT, E_KEEP = "BENCH heater", "BENCH heater status", "BENCH heater keepalive"
-E_CHILD = "Child Lock"
 SNAPSHOT = [E_SPEED, E_LOCKTEXT, E_CURRENT, E_CALSTAT, E_CALIBRATED, "SGTHRS (stall threshold)",
             "TCOOLTHRS", "Vibration Threshold", "StallGuard Enabled", "Vibration Stall Detection",
-            "Child Lock"]
+            *LOCK_NAMES]
 
 
 # ----------------------------------------------------------------------------- real unit
@@ -508,11 +508,12 @@ class Run:
             await self.dev.cover(path, "stop")
             self.check(f"{path} STOP works during the lockout",
                        await self.wait(lambda: self.logged(m, "COVER stop_action"), 3))
-        lock_was_on = bool(self.dev.get(E_CHILD))
+        lk = lock_name(self.dev)
+        lock_was_on = bool(self.dev.get(lk))
         if lock_was_on:
-            await self.dev.switch(E_CHILD, False)
+            await self.dev.switch(lk, False)
             await self.dev.sleep(2)
-            self.rec("Child Lock off for the Button 1 step", "INFO", f"Child Lock reads {self.dev.get(E_CHILD)}")
+            self.rec(f"{lk} off for the Button 1 step", "INFO", f"{lk} reads {self.dev.get(lk)}")
         try:
             m = self.mark()
             self.prompt.act("Daniel: press Button 1 once now (within 60 s)",
@@ -524,9 +525,9 @@ class Run:
                 self.rec("Button 1 during the lockout", "NT", "no press within 60 s")
         finally:
             if lock_was_on:
-                await self.dev.switch(E_CHILD, True)
+                await self.dev.switch(lk, True)
                 await self.dev.sleep(2)
-                self.rec("Child Lock back on after the Button 1 step", "INFO", f"Child Lock reads {self.dev.get(E_CHILD)}")
+                self.rec(f"{lk} back on after the Button 1 step", "INFO", f"{lk} reads {self.dev.get(lk)}")
 
     async def cooldown_pending(self, m_lock):
         await self.wait(lambda: (self.T() or 99) < 51.0, 60 * 60, poll=1)
@@ -658,6 +659,8 @@ async def main():
     ap.add_argument("--sim-window-left", type=float, help="sim only: minutes of window left at the start")
     ap.add_argument("--sim-guard", default="ok",
                     help="sim only: ok | missing | drop-after-MIN (the open guard's heartbeat in the dry run)")
+    ap.add_argument("--sim-lock-name", default="Child Lock", choices=LOCK_NAMES,
+                    help="sim only: the button-lock switch's name on the simulated unit")
     ap.add_argument("--out")
     a = ap.parse_args()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -666,7 +669,7 @@ async def main():
     if a.sim:
         sys.path.insert(0, str(pathlib.Path(__file__).parent))
         from tp1_sim import SimDevice
-        dev = SimDevice(fault=a.sim_fault)
+        dev = SimDevice(fault=a.sim_fault, lock_name=a.sim_lock_name)
     elif a.host:
         if not a.mac or not a.window_end:
             ap.error("--mac and --window-end are required with --host")

@@ -87,7 +87,7 @@
 # -----------------------------------------------------------------------------
 #   Button 1 (GPIO23):
 #     - Single click  : CALIBRATING     -> abort calibration (works even with
-#                                          Child Lock on — stopping an
+#                                          Button Lock on — stopping an
 #                                          autonomous sequence is a safety
 #                                          control, never lockable)
 #                       TAMPERED        -> silence alarm + return to IDLE

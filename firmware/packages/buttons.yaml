@@ -1,5 +1,5 @@
 # =============================================================================
-# Glasscalibur - Button 1, the Wi-Fi / calibrate button and Child Lock
+# Glasscalibur - Button 1, the Wi-Fi / calibrate button and Button Lock
 # =============================================================================
 # A local package merged by firmware/glasscalibur.yaml. Its items moved
 # verbatim from the former single product file.
@@ -37,7 +37,7 @@ binary_sensor:
 
       # --- Single Click ---
       # CALIBRATING             -> abort the calibration sequence. This check
-      #                            deliberately PRECEDES Child Lock: stopping
+      #                            deliberately PRECEDES Button Lock: stopping
       #                            an autonomous multi-travel sequence is a
       #                            safety control and must never be lockable.
       # TAMPERED                -> silence the alarm + return to IDLE.
@@ -59,9 +59,9 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: 'return id(child_lock).state;'
+                      lambda: 'return id(button_lock).state;'
                     then:
-                      - logger.log: "Child lock on — single click ignored"
+                      - logger.log: "Button lock on — single click ignored"
                     else:
                       - if:
                           condition:
@@ -119,9 +119,9 @@ binary_sensor:
               else:
                 - if:
                     condition:
-                      lambda: 'return id(child_lock).state;'
+                      lambda: 'return id(button_lock).state;'
                     then:
-                      - logger.log: "Child lock on — double click ignored"
+                      - logger.log: "Button lock on — double click ignored"
                     else:
                       - cover.open: glasscalibur_cover
 
@@ -189,7 +189,7 @@ binary_sensor:
   # scheduling mixin.)
 
 # -----------------------------------------------------------------------------
-# Child lock
+# Button lock
 # -----------------------------------------------------------------------------
 # When ON, the physical Button 1 ignores presses (single and double click), so
 # the cover can't be opened, closed, or stopped from the on-device button. Remote
@@ -201,8 +201,8 @@ binary_sensor:
 # locked.
 switch:
   - platform: template
-    name: "Child Lock"
-    id: child_lock
+    name: "Button Lock"
+    id: button_lock
     entity_category: CONFIG
     web_server:
       sorting_weight: 4
@@ -210,6 +210,26 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     turn_on_action:
-      - logger.log: "Child lock enabled — physical button disabled"
+      - logger.log: "Button lock enabled — physical button disabled"
     turn_off_action:
-      - logger.log: "Child lock disabled — physical button active"
+      - logger.log: "Button lock disabled — physical button active"
+
+# Until 2.3.0 this switch was named "Child Lock". At each boot, after every
+# component's setup, this step reads the setting saved under the old name: if it
+# is ON, it turns Button Lock on and writes OFF under the old name, so it applies
+# once.
+esphome:
+  on_boot:
+    - priority: -110
+      then:
+        - lambda: |-
+            // Key of the old name: ESPHome 2026.6.5's fnv1_hash_object_id("Child Lock").
+            auto old_pref = global_preferences->make_preference<bool>(2353329421UL);
+            bool was_on = false;
+            if (old_pref.load(&was_on) && was_on) {
+              id(button_lock).turn_on();
+              was_on = false;
+              old_pref.save(&was_on);
+              global_preferences->sync();
+              ESP_LOGI("buttons", "Button Lock on: setting carried over from the previous firmware");
+            }

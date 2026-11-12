@@ -57,7 +57,7 @@ All of these come from the firmware in [`firmware/`](firmware):
   motor is below 48 °C. Each step fires a **Thermal Alert** event.
 - **Tamper alarm** — once armed, the accelerometer notices if the mounted unit is
   moved and sounds the buzzer.
-- **Child Lock** — makes the unit's own button ignore presses; the web UI, Home
+- **Button Lock** — makes the unit's own button ignore presses; the web UI, Home
   Assistant and schedules keep working.
 - **Position across reboots** — the position is saved while moving and at every
   restart, including the restart at the end of a firmware update.

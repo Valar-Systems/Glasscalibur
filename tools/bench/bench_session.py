@@ -5,34 +5,34 @@
     python tools/bench/bench_session.py end   --host <unit address> --mac <MAC>
 
 start: records the sitting in tools/bench/out/sitting.json (the carriage, as confirmed with Daniel at
-the start; the window end; Child Lock's current setting) and turns Child Lock on, so Button 1 can't
-start a move by accident. Scripts that need Button 1 (TP-1's lockout press) turn it off just before
-that step and on again after. end: restores Daniel's original Child Lock setting and marks the
+the start; the window end; the button lock's current setting) and turns the button lock on (Button
+Lock, or Child Lock on 2.2.0), so Button 1 can't start a move by accident. Scripts that need Button 1
+(TP-1's lockout press) turn it off just before that step and on again after. end: restores Daniel's
+original setting and marks the
 sitting ended (the record is kept). Like the other scripts it checks the unit's MAC first and keeps
 no address or MAC in the record.
 """
 import argparse, asyncio, datetime, json, os, pathlib, sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from bench_common import SITTING  # noqa: E402
-
-E_CHILD = "Child Lock"
+from bench_common import SITTING, lock_name  # noqa: E402
 
 
 async def set_button_lock(dev, on, settle=2.0):
-    await dev.switch(E_CHILD, on)
+    name = lock_name(dev)
+    await dev.switch(name, on)
     await dev.sleep(settle)
-    return dev.get(E_CHILD) == on
+    return dev.get(name) == on
 
 
 async def start_sitting(dev, carriage, window_end, path=SITTING):
-    original = bool(dev.get(E_CHILD))
+    original = bool(dev.get(lock_name(dev)))
     rec = {"started": datetime.datetime.now().isoformat(timespec="seconds"), "carriage": carriage,
            "window_end": window_end, "button_lock_original": original, "ended": None}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rec, indent=1), encoding="utf-8")
     ok = await set_button_lock(dev, True)
-    print(f"Sitting started: carriage {carriage}; window ends {window_end}; Child Lock was "
+    print(f"Sitting started: carriage {carriage}; window ends {window_end}; {lock_name(dev)} was "
           f"{'on' if original else 'off'}, now {'on' if ok else 'NOT on'}.", flush=True)
     return ok
 
@@ -45,7 +45,7 @@ async def end_sitting(dev, path=SITTING):
     path.write_text(json.dumps(rec, indent=1), encoding="utf-8")
     kept = path.with_name(f"sitting-{rec['started'].replace(':', '')}.json")
     os.replace(path, kept)
-    print(f"Sitting ended: Child Lock {'restored' if ok else 'NOT restored'} to "
+    print(f"Sitting ended: {lock_name(dev)} {'restored' if ok else 'NOT restored'} to "
           f"{'on' if rec['button_lock_original'] else 'off'}; record kept as {kept.name}.", flush=True)
     return ok
 
