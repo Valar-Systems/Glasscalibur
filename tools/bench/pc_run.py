@@ -363,7 +363,7 @@ class Run:
                         say="Power cut next. Stand by the adapter.")
         await self.dev.sleep(3)                         # the spoken countdown starts after this
         for n, word in ((3, "three"), (2, "two"), (1, "one")):
-            self.prompt.act(f"Get ready to pull the 24 V adapter from the wall: {n}", say=word)
+            self.prompt.act(f"Power cut: {n}", say=word)
             await self.dev.sleep(1)
         if at_call and not open_delay:
             await at_call()
