@@ -66,8 +66,8 @@ restarts into setup.
 
 | Button | Gesture | Does |
 | --- | --- | --- |
-| **Button 1** (GPIO23) | one click (≤ 1 s) | ends a running calibration; otherwise silences a tamper alarm; otherwise stops a moving window; otherwise closes. Ignored while **Child Lock** is on (except ending a calibration). |
-| | double click | opens. Ignored while calibrating or with **Child Lock** on. |
+| **Button 1** (GPIO23) | one click (≤ 1 s) | ends a running calibration; otherwise silences a tamper alarm; otherwise stops a moving window; otherwise closes. Ignored while **Button Lock** is on (except ending a calibration). |
+| | double click | opens. Ignored while calibrating or with **Button Lock** on. |
 | **Wi‑Fi / Calibrate** (GPIO21) | 7 quick presses (each ≤ 0.6 s) | starts **Auto‑Calibrate**. |
 | | hold 3–10 s | clears the saved Wi‑Fi and restarts into setup. |
 
@@ -216,7 +216,7 @@ categories.
 | Glasscalibur | cover | open / close / stop / position (0 closed … 1 open) |
 | State | text | IDLE, OPENING, CLOSING, TAMPERED |
 | Button 1 | binary sensor | the unit's button |
-| Child Lock | switch (config) | the unit's button ignores presses; remote control keeps working |
+| Button Lock | switch (config) | the unit's button ignores presses; remote control keeps working |
 | Obstruction | event | `obstructed`, once per stall that stops a move outside calibration |
 | Thermal Alert | event | `warning`, `lockout`, `sensor_lost`, `cleared`, `refused` (see [Motor temperature](#motor-temperature)) |
 

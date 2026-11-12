@@ -19,6 +19,8 @@ MAX_AGE_S = 2.0
 MOVING = ("OPENING", "CLOSING")
 MOVE_PRESSES = ("Auto-Calibrate", "BENCH: fire scheduled open", "BENCH: fire scheduled close",
                 "BENCH: simulate stall")
+# The switch that makes Button 1 ignore presses: "Button Lock" from 2.3.0, "Child Lock" on 2.2.0.
+LOCK_NAMES = ("Button Lock", "Child Lock")
 
 
 # ----------------------------------------------------------------------------- heartbeat
@@ -149,6 +151,15 @@ class Prompter:
                 self._proc.stdin.close()
             except OSError:
                 pass
+
+
+# ----------------------------------------------------------------------------- the button lock
+def lock_name(dev):
+    """The button-lock switch this unit reports, newest name first."""
+    for name in LOCK_NAMES:
+        if dev.get(name) is not None:
+            return name
+    raise LookupError("the unit reports neither " + " nor ".join(f'"{n}"' for n in LOCK_NAMES))
 
 
 # ----------------------------------------------------------------------------- the sitting

@@ -27,8 +27,8 @@ SPEEDS = {"Slow": 1200, "Medium": 2600, "Fast": 5500}
 
 
 class SimDevice:
-    def __init__(self, fault=None):
-        self.fault, self.t = fault, 0.0
+    def __init__(self, fault=None, lock_name="Child Lock"):
+        self.fault, self.t, self.lock_name = fault, 0.0, lock_name
         self.mac = "02" + "00" * 4 + "01"          # a locally administered, made-up address
         self.commands = []                          # every command received (M1's sabotage)
         self.buttons_locked = False
@@ -108,7 +108,7 @@ class SimDevice:
                 "Glasscalibur": round(self.pos, 4), "Speed": self.speed, "Speed Lock": lock_text,
                 "Motor Current": self.current, "Calibration Status": self.cal_status,
                 "StallGuard calibrated": self.calibrated, "Firmware Version": "dev-tp1",
-                "StallGuard Enabled": True, "Vibration Stall Detection": True, "Child Lock": self.buttons_locked,
+                "StallGuard Enabled": True, "Vibration Stall Detection": True, self.lock_name: self.buttons_locked,
                 "BENCH heater": self.heat_on, "BENCH heater status": hs,
                 "Open stroke": self.stroke if self.stroke else float("nan"),
                 "Open Limit Switch": self.s4_mm is not None and self.actual >= self.s4_mm,
@@ -165,7 +165,7 @@ class SimDevice:
 
     async def switch(self, name, on):
         self.commands.append(("switch", name, bool(on)))
-        if name == "Child Lock":
+        if name == self.lock_name:
             self.buttons_locked = bool(on)
             return
         if name == "BENCH heater":
