@@ -23,8 +23,14 @@ Open guard interlock (bench_common.py): no move is sent unless open_guard.py is 
 watching; if it drops mid-move the script sends STOP and ends the run as INCOMPLETE. Prompts to
 Daniel show on top of his screen and are spoken. If Child Lock is on (bench_session.py turns it
 on for the sitting) it is turned off just before the Button 1 step and on again right after.
+Amendment 5: the device log and the rows are written to the run's folder as they arrive; the
+warning is judged on the value the firmware logged; phase A stops its heating move at 56.5 °C;
+each gate probe needs a reading of 55.5 or more just before it, is stopped at once if accepted,
+and is void when the firmware's logged reading was below 55.0; every FAIL, the window's end, a
+lost guard, an error, Ctrl+C or a file named STOP in the run's folder takes one clean stop (STOP,
+heater off, IRUN value put back, report written).
 """
-import argparse, asyncio, datetime, json, pathlib, re, sys, time, urllib.parse, urllib.request
+import argparse, asyncio, datetime, json, os, pathlib, re, sys, time, traceback, urllib.parse, urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from bench_common import GuardLost, GuardMissing, MoveGate, Prompter, guard_ok  # noqa: E402
@@ -32,6 +38,12 @@ from bench_common import GuardLost, GuardMissing, MoveGate, Prompter, guard_ok  
 WARN, GATE, LOCK, CLEAR = 50.0, 55.0, 60.0, 48.0
 BACKSTOP_C, STALE_S = 62.0, 10.0
 PENDING_LIMIT_S = 30 * 60
+AIM_A, PROBE_MIN, PROBE_TRIES, REHEAT_HEATER_S = 56.5, 55.5, 3, 600
+RX_STATE = re.compile(r"'Motor Temperature': Sending state (-?[\d.]+)")
+RX_WARN = re.compile(r"Motor (-?[\d.]+) degC - at or above the warning level")
+RX_LOCK = re.compile(r"THERMAL LOCKOUT - motor (-?[\d.]+) degC")
+RX_CLEAR = re.compile(r"Thermal lockout cleared - motor (-?[\d.]+) degC")
+PROBE_LINE = ("refused - ", "COVER open_action", "COVER close_action", "COVER position_action", "BENCH: firing")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # The kept device log never holds an address, a MAC or a unit-name suffix.
 REDACT = [(re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<ip>"),
@@ -41,6 +53,10 @@ REDACT = [(re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<ip>"),
 
 class WindowOver(Exception):
     pass
+
+
+class StopRun(Exception):
+    """A clean stop was asked for: a FAIL row (a miss), or the operator (STOP file)."""
 
 
 def window_from(arg):
@@ -55,8 +71,8 @@ def window_from(arg):
 class Windowed:
     """The device, with every wait checking the bench window (in 1 s slices)."""
 
-    def __init__(self, dev, minutes_left):
-        self._dev, self._left, self.off = dev, minutes_left, False
+    def __init__(self, dev, minutes_left, stop_path=None):
+        self._dev, self._left, self.off, self._stop = dev, minutes_left, False, stop_path
 
     def __getattr__(self, name):
         return getattr(self._dev, name)
@@ -66,6 +82,8 @@ class Windowed:
         while True:
             if not self.off and self._left(self._dev) <= 0:
                 raise WindowOver()
+            if not self.off and self._stop is not None and self._stop.exists():
+                raise StopRun("stopped: operator (STOP file)")
             rest = end - self._dev.now()
             if rest <= 0:
                 return
@@ -82,8 +100,8 @@ E_ALERT, E_OBSTRUCTION, E_COVER = "Thermal Alert", "Obstruction", "Glasscalibur"
 E_SPEED, E_LOCKTEXT, E_CURRENT = "Speed", "Speed Lock", "Motor Current"
 E_CALSTAT, E_CALIBRATED, E_FW = "Calibration Status", "StallGuard calibrated", "Firmware Version"
 E_HEATER, E_HEATSTAT, E_KEEP = "BENCH heater", "BENCH heater status", "BENCH heater keepalive"
-E_CHILD = "Child Lock"
-SNAPSHOT = [E_SPEED, E_LOCKTEXT, E_CURRENT, E_CALSTAT, E_CALIBRATED, "SGTHRS (stall threshold)",
+E_CHILD, E_IRUN = "Child Lock", "IRUN value"
+SNAPSHOT = [E_SPEED, E_LOCKTEXT, E_CURRENT, E_IRUN, E_CALSTAT, E_CALIBRATED, "SGTHRS (stall threshold)",
             "TCOOLTHRS", "Vibration Threshold", "StallGuard Enabled", "Vibration Stall Detection",
             "Child Lock"]
 
@@ -96,7 +114,7 @@ class RealDevice:
     def __init__(self, host):
         self.host, self.t0 = host, time.monotonic()
         self.states, self.events, self.logs, self.keys, self.kinds = {}, [], [], {}, {}
-        self.seen, self.connected = {}, False
+        self.seen, self.connected, self.temp_hist, self.log_sink = {}, False, [], None
 
     def now(self):
         return time.monotonic() - self.t0
@@ -129,10 +147,14 @@ class RealDevice:
             self.states[name] = st.position
             return
         self.states[name] = getattr(st, "state", None)
+        if name == E_TEMP:
+            self.temp_hist.append((self.now(), self.states[name]))
 
     def _on_log(self, msg):
         line = ANSI.sub("", msg.message.decode("utf-8", "replace") if isinstance(msg.message, bytes) else msg.message)
         self.logs.append((self.now(), redact(line)))
+        if self.log_sink:
+            self.log_sink(*self.logs[-1])
 
     def get(self, name):
         return self.states.get(name)
@@ -180,6 +202,9 @@ class Run:
         self.moves_to = {GATE: None, LOCK: None}
         self.snapshot, self.after = {}, {}
         self.prompt = Prompter(record_only=True)
+        self.gate_verdicts, self.gate_notrun, self.gate_void, self.probe_log = [], [], 0, []
+        self.phase_a_stops, self.reheats, self.in_clean_stop, self.wdev = [], 0, False, None
+        self.rows_f = open(out / "tp1-rows.txt", "a", encoding="utf-8")
 
     # --- helpers
     def T(self):
@@ -196,6 +221,10 @@ class Run:
         self.rows.append(row)
         print(f"[{row['t_s']:8.1f}s] {verdict:5} {step}" + (f" — {detail}" if detail else "")
               + (f" ({row['reading_c']} °C)" if t is not None else ""), flush=True)
+        self.rows_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self.rows_f.flush()
+        if verdict == "FAIL" and not self.in_clean_stop:
+            raise StopRun(f"miss: {step}")
         return verdict == "PASS"
 
     def check(self, step, ok, detail=""):
@@ -223,15 +252,26 @@ class Run:
         await self.wait(lambda: self.state() == "IDLE", 5)
 
     # --- backstops while the motor moves (also checked by the firmware at 62 °C)
-    async def watch_move(self, max_s):
-        """Wait for the move to end. STOP at 62 °C or after 10 s with no reading (FAIL).
-        Returns (ended, peak, t_idle): t_idle = when State was first seen IDLE."""
+    async def watch_move(self, max_s, stop_at=None):
+        """Wait for the move to end. STOP at 62 °C or after 10 s with no reading (FAIL), and at
+        `stop_at` if given (phase A, Amendment 5). Returns (ended, peak, t_idle): t_idle = when
+        State was first seen IDLE."""
         peak = self.T() or 0.0
         end = self.dev.now() + max_s
         while self.dev.now() < end:
             t = self.T()
             if t is not None:
                 peak = max(peak, t)
+            if stop_at is not None and t is not None and t >= stop_at and self.state() in ("OPENING", "CLOSING"):
+                seen = next((ts for ts, v in reversed(self.dev.temp_hist) if v is not None and v < stop_at), None)
+                first = next((ts for ts, v in self.dev.temp_hist if v is not None and v >= stop_at
+                              and (seen is None or ts > seen)), self.dev.now())
+                t_stop = self.dev.now()
+                await self.stop()
+                self.phase_a_stops.append({"reading": t, "first_reading_s": round(first, 2), "stop_s": round(t_stop, 2)})
+                self.rec(f"heating move stopped at {stop_at} °C", "INFO",
+                         f"STOP {t_stop - first:.2f} s after the first reading of {stop_at} or more ({t})")
+                return True, peak, self.dev.now()
             if t is not None and t >= BACKSTOP_C:
                 await self.stop()
                 self.rec("script backstop: 62 °C while moving", "FAIL", "STOP sent")
@@ -305,6 +345,10 @@ class Run:
             t = self.T()
             if self.dev.get(E_LOCKOUT) or (t is not None and t >= goal):
                 return True
+            if goal < LOCK and t is not None and t >= GATE:
+                # Phase A (Amendment 5): no stroke may start at 55 or above; the heater finishes it.
+                self.rec(f"reading between {GATE} and {goal}: heater to {goal} without motion", "INFO", f"{t}")
+                return await self.heat_with_heater(goal, limit_s=REHEAT_HEATER_S)
             if t is not None and t >= GATE and goal >= LOCK:
                 # Phase B: a stroke ended between 55 and 60. Wait to just below 55, then one
                 # more full stroke from there; if a stroke started near 55 already peaked
@@ -339,7 +383,14 @@ class Run:
             await self.dev.cover("api", cmd, tgt if cmd == "set" else None)
             await self.wait(lambda: self.state() in ("OPENING", "CLOSING"), 3)
             m_lockout_before = self.dev.get(E_LOCKOUT)
-            ok, peak, t_idle = await self.watch_move(400)
+            n_stops = len(self.phase_a_stops)
+            ok, peak, t_idle = await self.watch_move(400, stop_at=goal if goal < LOCK else None)
+            if len(self.phase_a_stops) > n_stops:
+                self.moves.append({"n": len(self.moves) + 1, "kind": cmd if cmd != "set" else f"set {tgt}",
+                                   "frac": round(frac, 3), "start_c": start, "end_c": self.T(),
+                                   "peak_after_stop_c": round(peak, 2), "obstruction": False,
+                                   "lockout_during_move": False, "lockout_to_idle_s": None, "stopped_at_goal": True})
+                return True
             lk = self.events_of(m, "lockout")
             # The lockout latched during this move if its event came before the move was seen
             # to end (the firmware stops the motor in the same step, so State reads IDLE at
@@ -375,12 +426,16 @@ class Run:
             if self.events_of(m, "lockout"):
                 return True
 
-    async def heat_with_heater(self, goal):
-        """Fallback: the test package's hold-current heater, kept alive every 5 s."""
-        self.heater_used = True
+    async def heat_with_heater(self, goal, limit_s=46 * 60):
+        """The test package's hold-current heater, kept alive every 5 s: phase B's fallback, and
+        (Amendment 5) phase A's and the gate probes' reheating without motion."""
+        if goal >= LOCK:
+            self.heater_used = True
+        else:
+            self.reheats += 1
         await self.dev.switch(E_HEATER, True)
         await self.dev.sleep(2)
-        end, last_ka = self.dev.now() + 46 * 60, -1e9
+        end, last_ka = self.dev.now() + limit_s, -1e9
         while self.dev.now() < end and self.dev.get(E_HEATER):
             if self.dev.get(E_LOCKOUT) or (self.T() or 0) >= goal:
                 break
@@ -458,23 +513,151 @@ class Run:
                    f"still moving 1 s after the trip={kept}, ended={ended}")
         await self.wait(lambda: self.events_of(m, "cleared"), 10)
 
+    # --- warning value (Amendment 5, A5-1)
+    def warning_check(self, m):
+        w = self.events_of(m, "warning")
+        logs = self.dev.logs
+        idx = next((i for i in range(m[0], len(logs)) if RX_WARN.search(logs[i][1])), None)
+        x = float(RX_WARN.search(logs[idx][1]).group(1)) if idx is not None else None
+        y = None
+        if idx is not None:
+            for j in range(idx - 1, -1, -1):
+                mm = RX_STATE.search(logs[j][1])
+                if mm:
+                    y = float(mm.group(1))
+                    break
+        if w:
+            te, hist = w[0][0], self.dev.temp_hist
+            before = [v for ts, v in hist if ts < te]
+            after = [v for ts, v in hist if ts >= te]
+            first50 = next((ts for ts, v in hist if v is not None and v >= WARN), None)
+            order = "event first" if first50 is None or first50 >= te else "state first"
+            self.rec("warning: API pairing (information)", "INFO",
+                     f"last reading before the event {before[-1] if before else None}; first at or after "
+                     f"{after[0] if after else None}; order: {order}")
+        val = y if y is not None else x
+        self.check("one warning event; the firmware's logged value 50.0-52.0",
+                   len(w) == 1 and val is not None and WARN <= val <= 52.0,
+                   f"{len(w)} event(s); warning line {x}; state line before it {y}")
+
+    # --- gate probes (Amendment 5, A5-4)
+    def fw_at_probe(self, m):
+        """The lowest firmware reading at the probe's own log lines (the last 'Sending state' line
+        before each), or None when no such line is found."""
+        logs, vals = self.dev.logs, []
+        for i in range(m[0], len(logs)):
+            if any(k in logs[i][1] for k in PROBE_LINE):
+                for j in range(i - 1, -1, -1):
+                    mm = RX_STATE.search(logs[j][1])
+                    if mm:
+                        vals.append(float(mm.group(1)))
+                        break
+        return min(vals) if vals else None
+
+    async def stop_if_moving(self, m, timeout):
+        """STOP at once if the unit starts moving; False when it was refused or didn't move."""
+        end = self.dev.now() + timeout
+        while self.dev.now() < end:
+            if self.state() in ("OPENING", "CLOSING"):
+                await self.stop()
+                return True
+            if self.logged(m, "refused - "):
+                return False
+            await self.dev.sleep(0.1)
+        return False
+
+    async def one_heating_move(self):
+        """One stroke from below 55, stopped at 56.5 (no FAIL if the unit refuses it)."""
+        pos = self.dev.get(E_COVER) or 0.0
+        cmd = "close" if pos > 0.5 else "open"
+        await self.dev.cover("api", cmd)
+        if await self.wait(lambda: self.state() in ("OPENING", "CLOSING"), 3):
+            await self.watch_move(400, stop_at=AIM_A)
+
+    async def gate_ready(self):
+        if (self.T() or 0) >= PROBE_MIN:
+            return True
+        self.rec("gate probe: reading below 55.5, reheating", "INFO", str(self.T()))
+        if await self.heat_with_heater(AIM_A, limit_s=REHEAT_HEATER_S) and (self.T() or 0) >= PROBE_MIN:
+            return True
+        if not await self.wait(lambda: (self.T() or 99) < GATE, 30 * 60, poll=1):
+            return False
+        await self.one_heating_move()
+        return (self.T() or 0) >= PROBE_MIN
+
+    async def gate_probe(self, name, send, judge):
+        for attempt in range(1, PROBE_TRIES + 1):
+            if not await self.gate_ready():
+                continue
+            t_chk, v = self.dev.now(), self.T()
+            if v is None or v < PROBE_MIN:
+                continue
+            m = self.mark()
+            t_send = self.dev.now()
+            accepted = await send(m)
+            await self.dev.sleep(0.5)
+            fw = self.fw_at_probe(m)
+            ok, detail = judge(m, accepted)
+            self.probe_log.append({"probe": name, "try": attempt, "reading": v, "check_to_send_s": round(t_send - t_chk, 2),
+                                   "fw": fw, "accepted": accepted})
+            info = f"try {attempt}; reading {v} checked {t_send - t_chk:.2f} s before sending; firmware {fw}"
+            if fw is None or fw < GATE:
+                self.gate_void += 1
+                self.rec(f"{name}: void (firmware reading below {GATE})", "INFO", info)
+                # retry once the reading is back at 55.5 or more: first let it go below (note 3)
+                await self.wait(lambda: (self.T() or 0) < PROBE_MIN, 120, poll=0.5)
+                continue
+            self.gate_verdicts.append(name)
+            self.rec(name, "PASS" if ok and not accepted else "FAIL", f"{detail}; {info}")
+            return
+        self.gate_notrun.append(name)
+        self.rec(f"{name}: not run (no verdict after {PROBE_TRIES} tries)", "NT")
+
     async def gate_checks(self):
         for path in ("api", "rest"):
             for cmd in ("open", "close", "set"):
-                await self.probe_refused(path, cmd, self.target_away() if cmd == "set" else None, "motor")
-        m = self.mark()
-        await self.dev.press("BENCH: fire scheduled close")
-        await self.dev.sleep(1.5)
-        await self.dev.press("BENCH: fire scheduled open")
-        await self.dev.sleep(1.5)
-        self.check("scheduled close then open: refused, the open replaces it (latest wins)",
-                   self.logged(m, "Scheduled close kept pending") and self.logged(m, "Scheduled open kept pending")
-                   and len(self.events_of(m, "refused")) >= 2)
-        m = self.mark()
-        await self.dev.cover("api", "close")
-        await self.dev.sleep(2)
-        return self.check("a refused Close cancels the pending scheduled open",
-                          self.logged(m, "refused") and self.logged(m, "Pending scheduled open cancelled"))
+                pos0 = {}
+
+                async def send(m, path=path, cmd=cmd, pos0=pos0):
+                    pos0["p"] = self.dev.get(E_COVER)
+                    await self.dev.cover(path, cmd, self.target_away() if cmd == "set" else None)
+                    return await self.stop_if_moving(m, 3)
+
+                def judge(m, accepted, pos0=pos0):
+                    got = self.logged(m, "refused - motor") and bool(self.events_of(m, "refused"))
+                    still = not accepted and self.dev.get(E_COVER) == pos0["p"]
+                    return got and still, ("log + Thermal Alert refused, no motion" if got and still else
+                                           f"log/event={got}, idle-and-still={still}")
+                await self.gate_probe(f"{path} {cmd} refused (motor)", send, judge)
+
+        async def send_pair(m):
+            await self.dev.press("BENCH: fire scheduled close")
+            a1 = await self.stop_if_moving(m, 1.5)
+            m2 = self.mark()
+            await self.dev.press("BENCH: fire scheduled open")
+            a2 = await self.stop_if_moving(m2, 1.5)
+            return a1 or a2
+
+        def judge_pair(m, accepted):
+            ok = (self.logged(m, "Scheduled close kept pending") and self.logged(m, "Scheduled open kept pending")
+                  and len(self.events_of(m, "refused")) >= 2)
+            return ok, "both kept pending, the open last" if ok else "not both kept pending"
+        await self.gate_probe("scheduled close then open: refused, the open replaces it (latest wins)", send_pair, judge_pair)
+
+        async def send_close(m):
+            if not self.logged((0, 0), "Scheduled open kept pending") or self.logged(m, "Pending scheduled open"):
+                pass
+            await self.dev.press("BENCH: fire scheduled open")
+            if await self.stop_if_moving(m, 1.5):
+                return True
+            m2 = self.mark()
+            await self.dev.cover("api", "close")
+            return await self.stop_if_moving(m2, 2)
+
+        def judge_close(m, accepted):
+            ok = self.logged(m, "Close refused") and self.logged(m, "Pending scheduled open cancelled")
+            return ok, "refused, pending open cancelled" if ok else "pending open not cancelled"
+        await self.gate_probe("a refused Close cancels the pending scheduled open", send_close, judge_close)
 
     async def phase_a_cooldown(self):
         m = self.mark()
@@ -487,11 +670,39 @@ class Run:
         self.check("after the cancel, cooling below 50 °C: nothing moves",
                    ok and idle and not self.logged(m, "running the pending"))
 
+    def logged_value(self, m, rx):
+        """(the value on the firmware's own line, the 'Sending state' value just before it)."""
+        logs = self.dev.logs
+        idx = next((i for i in range(m[0], len(logs)) if rx.search(logs[i][1])), None)
+        if idx is None:
+            return None, None
+        x = float(rx.search(logs[idx][1]).group(1))
+        for j in range(idx - 1, -1, -1):
+            mm = RX_STATE.search(logs[j][1])
+            if mm:
+                return x, float(mm.group(1))
+        return x, None
+
+    def pairing_info(self, what, ev, thr, at_or_above):
+        """Information only (Amendment 5): the API readings either side of the event."""
+        if not ev:
+            return
+        te, hist = ev[0][0], self.dev.temp_hist
+        before = [v for ts, v in hist if ts < te]
+        after = [v for ts, v in hist if ts >= te]
+        first = next((ts for ts, v in hist if ts >= te - 60 and v is not None and (v >= thr if at_or_above else v < thr)), None)
+        order = "event first" if first is None or first >= te else "state first"
+        self.rec(f"{what}: API pairing (information)", "INFO",
+                 f"last reading before the event {before[-1] if before else None}; first at or after "
+                 f"{after[0] if after else None}; order: {order}")
+
     async def lockout_checks(self, m_lock):
         ev = self.events_of(m_lock, "lockout")
-        t_lock = ev[0][3] if ev else None
-        self.check("lockout at the first reading >= 60 (60.0-62.0)", t_lock is not None and LOCK <= t_lock <= 62.0,
-                   f"reading {t_lock}")
+        self.pairing_info("lockout", ev, LOCK, True)
+        x, y = self.logged_value(m_lock, RX_LOCK)
+        t_lock = y if y is not None else x
+        self.check("lockout at the first reading >= 60 (60.0-62.0)", bool(ev) and t_lock is not None and LOCK <= t_lock <= 62.0,
+                   f"logged {x} (state line before it {y})")
         self.check("Thermal Lockout on", bool(self.dev.get(E_LOCKOUT)))
         if self.heater_used:
             hs = str(self.dev.get(E_HEATSTAT))
@@ -538,9 +749,11 @@ class Run:
                    self.logged(m, "Scheduled open kept pending") and bool(self.events_of(m, "refused")))
         cleared = await self.wait(lambda: self.events_of(m, "cleared"), PENDING_LIMIT_S, poll=1)
         ev = self.events_of(m, "cleared")
-        t_clear = ev[0][3] if ev else None
+        self.pairing_info("clear", ev, CLEAR, False)
+        x, y = self.logged_value(m, RX_CLEAR)
+        t_clear = y if y is not None else x
         self.check("cleared at the first reading below 48 °C", cleared and t_clear is not None and t_clear < CLEAR,
-                   f"reading {t_clear}, {self.dev.now() - fired:.0f} s after firing")
+                   f"logged {x} (state line before it {y}), {self.dev.now() - fired:.0f} s after firing")
         self.check("Thermal Lockout off after the clear", not self.dev.get(E_LOCKOUT))
         ran = await self.wait(lambda: self.logged(m, "running the pending scheduled open")
                               and self.state() in ("OPENING", "CLOSING"), 6)
@@ -557,14 +770,15 @@ class Run:
             await self.dev.select(E_SPEED, s[E_SPEED])
             await self.dev.sleep(2)
             await self.calibrate(f"restore at {s[E_SPEED]}")
-        if s[E_CURRENT] is not None:
-            await self.dev.number(E_CURRENT, s[E_CURRENT])
+        if s.get(E_IRUN) is not None:
+            await self.dev.number(E_IRUN, s[E_IRUN])
             await self.dev.sleep(6)
         self.after = self.snap()
         same = {k: self.after.get(k) == v for k, v in s.items()}
         self.rec("settings put back", "INFO", json.dumps({"before": s, "after": self.after}))
-        self.check("Speed and Motor Current as before", same[E_SPEED] and
-                   abs((self.after[E_CURRENT] or 0) - (s[E_CURRENT] or 0)) <= 20)
+        self.check("Speed and Motor Current as before", same[E_SPEED] and same.get(E_IRUN, True) and
+                   abs((self.after[E_CURRENT] or 0) - (s[E_CURRENT] or 0)) <= 20,
+                   f"IRUN value {s.get(E_IRUN)} -> {self.after.get(E_IRUN)}")
         if not s[E_CALIBRATED]:
             self.rec("calibration flag", "INFO", "the unit was not calibrated before; it stays calibrated")
 
@@ -575,11 +789,9 @@ class Run:
             return
         await self.s0()
         warn_m = self.mark()
-        # Phase A: to 55-60 at standstill, no lockout
-        await self.heat_by_moves(GATE, partial_from=WARN)
-        w = self.events_of(warn_m, "warning")
-        self.check("one warning event at the first reading >= 50 (50.0-52.0)",
-                   len(w) == 1 and WARN <= w[0][3] <= 52.0, f"{len(w)} event(s), reading {w[0][3] if w else None}")
+        # Phase A: to 56.5 (Amendment 5), no lockout
+        await self.heat_by_moves(AIM_A, partial_from=WARN)
+        self.warning_check(warn_m)
         a_done = False
         if not self.dev.get(E_LOCKOUT) and GATE <= (self.T() or 0) < LOCK:
             await self.gate_checks()
@@ -609,7 +821,7 @@ class Run:
         await self.lockout_checks(m_lock)
         await self.cooldown_pending(m_lock)
         if not a_done:
-            await self.heat_by_moves(GATE, partial_from=WARN)
+            await self.heat_by_moves(AIM_A, partial_from=WARN)
             if not self.dev.get(E_LOCKOUT) and GATE <= (self.T() or 0) < LOCK:
                 await self.gate_checks()
                 await self.phase_a_cooldown()
@@ -618,11 +830,38 @@ class Run:
         for path in ("api", "rest"):
             await self.probe_accepted(path, "set", self.target_away())
 
+    async def clean_stop(self, why, raw):
+        """Amendment 5 (A5-5): STOP, heater off, IRUN value put back, files flushed; the report follows."""
+        self.in_clean_stop = True
+        if self.wdev is not None:
+            self.wdev.off = True
+        s, back, not_back = self.snapshot, [], []
+        if s:
+            await raw.cover("api", "stop")
+        if raw.get(E_HEATER):
+            await raw.switch(E_HEATER, False)
+        if s and s.get(E_IRUN) is not None and raw.get(E_IRUN) != s[E_IRUN]:
+            await raw.number(E_IRUN, s[E_IRUN])
+            back.append("Motor Current (IRUN value)")
+        if s and raw.get(E_SPEED) != s.get(E_SPEED):
+            not_back.append(f"Speed ({s.get(E_SPEED)}) and a calibration at it")
+        reason = ("bench window ended" if isinstance(why, WindowOver) else
+                  "stopped: operator (Ctrl+C)" if isinstance(why, (KeyboardInterrupt, asyncio.CancelledError)) else
+                  str(why) if isinstance(why, (StopRun, GuardMissing, GuardLost)) else
+                  f"stopped: unexpected error {type(why).__name__}: {why}")
+        if not isinstance(why, (StopRun, WindowOver, GuardMissing, GuardLost, KeyboardInterrupt, asyncio.CancelledError)):
+            traceback.print_exception(why)
+        self.rec(reason, "INCOMPLETE",
+                 ("STOP sent; " if s else "no command had been sent; ") + "heater off; put back: "
+                 + (", ".join(back) or "nothing needed") + "; NOT put back: " + (", ".join(not_back) or "nothing"))
+
     def report(self):
         fails = [r for r in self.rows if r["verdict"] == "FAIL"]
-        cut_short = [r for r in self.rows if r["verdict"] == "INCOMPLETE"]
+        cut_short = [r for r in self.rows if r["verdict"] == "INCOMPLETE"] or self.gate_notrun
         obstructions = sum(1 for mv in self.moves if mv["obstruction"])
-        summary = {"result": "FAIL" if fails else "INCOMPLETE" if cut_short else "PASS", "moves_to_55": self.moves_to[GATE],
+        summary = {"result": "FAIL" if fails else "INCOMPLETE" if cut_short else "PASS",
+                   "gate_probes": {"verdicts": len(self.gate_verdicts), "void": self.gate_void, "not_run": self.gate_notrun},
+                   "moves_to_55": self.moves_to[GATE],
                    "moves_to_60": self.moves_to[LOCK], "false_obstruction_stops": obstructions,
                    "heater_used": self.heater_used, "before": self.snapshot, "after": self.after}
         (self.out / "tp1-report.json").write_text(json.dumps({"summary": summary, "steps": self.rows,
@@ -638,8 +877,8 @@ class Run:
         md += ["", "| setting | before | after |", "|---|---|---|"]
         md += [f"| {k} | {self.snapshot.get(k)} | {self.after.get(k)} |" for k in SNAPSHOT]
         (self.out / "tp1-report.md").write_text("\n".join(md) + "\n", encoding="utf-8")
-        (self.out / "device-log.txt").write_text("\n".join(f"{t:9.1f} {l}" for t, l in self.dev.logs),
-                                                 encoding="utf-8")
+        (self.out / "probes.json").write_text(json.dumps(self.probe_log, indent=1), encoding="utf-8")
+        self.rows_f.flush()
         print(f"\nTP-1: {summary['result']} — report in {self.out}", flush=True)
         return summary["result"]
 
@@ -673,6 +912,13 @@ async def main():
         dev = RealDevice(a.host)
     else:
         ap.error("give --host <unit address> --mac <MAC>, or --sim")
+    log_f = open(out / "device-log.txt", "a", encoding="utf-8")
+
+    def sink(t, line):
+        log_f.write(f"{t:9.1f} {line}\n")
+        log_f.flush()
+    dev.log_sink = sink
+    dev.out_dir = out
     await dev.start()
     # The unit must report the requested MAC before any command is sent (none is sent so far).
     want = norm_mac(a.mac) if a.mac else (norm_mac(dev.mac) if a.sim else "")
@@ -695,7 +941,7 @@ async def main():
         await dev.close()
         return 3
     await dev.sleep(5)                        # first states
-    wdev = Windowed(dev, left)
+    wdev = Windowed(dev, left, stop_path=out / "STOP")
     prompt = Prompter(record_only=a.sim)
     events = []
 
@@ -716,26 +962,14 @@ async def main():
         check = guard_ok
     gdev = MoveGate(wdev, check=check, on_event=on_event)
     run = Run(gdev, out)
-    run.prompt = prompt
+    run.prompt, run.wdev = prompt, wdev
     try:
         try:
             await run.run()
             await run.restore()
-        except (WindowOver, GuardMissing, GuardLost) as why:
-            wdev.off = True
-            await dev.cover("api", "stop")
-            if dev.get(E_HEATER):
-                await dev.switch(E_HEATER, False)
-            s, back, not_back = run.snapshot, [], []
-            if s and s.get(E_CURRENT) is not None and dev.get(E_CURRENT) != s[E_CURRENT]:
-                await dev.number(E_CURRENT, s[E_CURRENT])
-                back.append("Motor Current")
-            if s and dev.get(E_SPEED) != s.get(E_SPEED):
-                not_back.append(f"Speed ({s.get(E_SPEED)}) and a calibration at it")
-            reason = "bench window ended" if isinstance(why, WindowOver) else str(why)
-            run.rec(reason, "INCOMPLETE",
-                    "STOP sent; heater off; put back: " + (", ".join(back) or "nothing needed")
-                    + "; NOT put back: " + (", ".join(not_back) or "nothing"))
+        except (WindowOver, GuardMissing, GuardLost, StopRun, KeyboardInterrupt, asyncio.CancelledError,
+                Exception) as why:
+            await run.clean_stop(why, dev)
     finally:
         if dev.get(E_HEATER):
             await dev.switch(E_HEATER, False)
@@ -744,6 +978,7 @@ async def main():
                                               encoding="utf-8")
         prompt.close()
         await dev.close()
+        log_f.close()
     return 0 if result == "PASS" else 1
 
 
