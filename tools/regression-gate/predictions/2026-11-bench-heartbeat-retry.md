@@ -55,3 +55,17 @@ Then TP-1 reruns on the sealed unit (old carriage, window to 22:00 PT) from this
 - HB3 head: not OK, "the open guard's heartbeat file stayed locked", after 0.21 s. Sabotage: OK returned.
 - HB4: `tp1_run.py --sim` ended PASS; `--sim-guard drop-after-1` ended INCOMPLETE with STOP sent.
 - The check script (hb_test.py) is kept with the bench evidence; it goes into the PR with this file.
+
+## Amendment 1 — HB5, a writer that stops (review, 2026-11-12; before the check is written)
+
+- The retries must not hide a guard that has stopped writing. None of HB1-HB4 shows that on the
+  file path (HB4's drop uses the dry run's own check), so HB5 is added.
+- HB5: a writer process using this branch's `write_heartbeat` beats every 0.5 s, then exits
+  abruptly after 3 s. A MoveGate over a stand-in device that reports State OPENING calls `sleep`
+  until it raises. Predicted: it sends STOP and raises GuardLost with the "... s old" reason, at
+  most 2.8 s after the last beat's time stamp (2.0 s age limit, up to 0.5 s between checks, up to
+  0.2 s of read retries, 0.1 s slack).
+  Sabotage: a copy whose `guard_ok` keeps retrying a stale reading for up to 5 s before reporting
+  it. STOP then comes later than 2.8 s, and HB5 reports it.
+- The checks (HB1-HB5) move into `tools/bench/heartbeat_check.py` in this PR, so they can be rerun.
+- The full set (HB1-HB5, each with its sabotage, and HB4's dry runs) reruns on the new head.
