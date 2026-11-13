@@ -26,7 +26,7 @@ and "Motor Current" reads back (IRUN + 1) / 32 of it. Faults:
   cool-fast             the moving part of the reading is 3.0 °C with a 4 s time constant
   state-lag             the API reading trails the firmware's by 6 s (with the cool-fast sensor)
   no-reheat             from the first STOP at 56 °C or more to the end of the run, the heater
-                        adds no heat and every move is refused
+                        adds no heat and every move is refused (with the cool-fast sensor)
   exit-at-600           the process ends abruptly at virtual 600 s, after writing how many log
                         lines it produced (sim-exit-count.txt in the run's folder)
   operator-stop-at-700  a file named STOP appears in the run's folder at virtual 700 s
@@ -42,6 +42,7 @@ TRIMMED_S4_MM, TRIMMED_HARD_MM = 99.3, 101.41   # trimmed carriage (profiles fre
 SPEEDS = {"Slow": 1200, "Medium": 2600, "Fast": 5500}
 FULL_SCALE_MA = 957.54                  # 0.325 V / (0.22 + 0.02) ohm / sqrt(2)
 BOOST_MAX, BOOST_UP_S, BOOST_DOWN_S = 1.5, 20.0, 8.0
+CMD_DELAY_S = 0.5                       # cover open/close/set and presses (note 4); STOP stays immediate
 
 
 def irun_of(ma):
@@ -156,6 +157,8 @@ class SimDevice:
     async def cover(self, path, cmd, pos=None):
         self.commands.append(("cover", cmd))
         self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
+        if cmd != "stop":
+            await self.sleep(CMD_DELAY_S)              # note 4: a bench-like round trip
         what = {"open": "Open", "close": "Close", "set": "Set position"}.get(cmd)
         if cmd == "stop":
             if self.fault == "no-reheat" and self.no_reheat_until is None and self.fw >= 56.0:
@@ -178,6 +181,7 @@ class SimDevice:
     async def press(self, name):
         self.commands.append(("press", name))
         self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
+        await self.sleep(CMD_DELAY_S)
         if name == "BENCH heater keepalive":
             self.ka = self.t
         elif name in ("BENCH: fire scheduled open", "BENCH: fire scheduled close"):
@@ -349,7 +353,7 @@ class SimDevice:
                (heater_k * (self.ihold / 19.0) ** 2 if self.heat_on and not moving else 0.0)
         self.core += (heat - (self.core - AMBIENT) / TAU_S) * dt
         self.sens += (self.core - self.sens) * dt / LAG_S
-        b_max, b_down = (3.0, 4.0) if self.fault in ("cool-fast", "state-lag") else (BOOST_MAX, BOOST_DOWN_S)
+        b_max, b_down = (3.0, 4.0) if self.fault in ("cool-fast", "state-lag", "no-reheat") else (BOOST_MAX, BOOST_DOWN_S)
         self.boost += ((b_max - self.boost) / BOOST_UP_S if moving else -self.boost / b_down) * dt
         if self.t >= self.next_read:                                  # product sensor, 3 s
             self.next_read += 3.0

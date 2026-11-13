@@ -165,20 +165,14 @@ def a54a(d):
 
 def a54b(d):
     acc = [p for p in d["probes"] if p["accepted"]]
-    t_act = [t for t in log_times(d, "COVER open_action")]
-    t_stop = log_times(d, "COVER stop_action")
-    first_acc_t = None
-    if acc:
-        g = [r for r in d["rows"] if r["verdict"] == "FAIL" and "refused (motor)" in r["step"]]
-        first_acc_t = g[0]["t_s"] if g else None
-    # the accepted probe's move line and the STOP after it
+    g = [r for r in d["rows"] if r["verdict"] == "FAIL" and "refused (motor)" in r["step"]]
     gap = None
-    if first_acc_t is not None:
-        moves = [t for t in t_act if t <= first_acc_t]
-        if moves:
-            m0 = moves[-1]
-            nxt = [t for t in t_stop if t >= m0]
-            gap = round(nxt[0] - m0, 2) if nxt else None
+    if acc and g:                       # note 4: the probe's move line, then the first STOP line after it
+        lines, t_fail = d["log"], g[0]["t_s"]
+        idx = [i for i, l in enumerate(lines) if "COVER open_action" in l and float(l[:9]) <= t_fail]
+        if idx:
+            nxt = next((j for j in range(idx[-1] + 1, len(lines)) if "COVER stop_action" in lines[j]), None)
+            gap = round(float(lines[nxt][:9]) - float(lines[idx[-1]][:9]), 2) if nxt is not None else None
     miss = rows(d, "miss:", "INCOMPLETE")
     ok = bool(acc) and gap is not None and gap < 1.0 and bool(miss)
     return ok, f"accepted probes {len(acc)}; move-to-STOP {gap} s; clean stop rows {len(miss)}"
@@ -220,7 +214,7 @@ def a55b(d):
     if not f:
         return False, "no FAIL row"
     t_f = f[0]["t_s"]
-    after = [c for c in d["cmds"] if c[0] > t_f]
+    after = [c for c in d["cmds"] if c[0] >= t_f]          # note 4: at or after
     other = [c for c in after if not ((c[1] == "cover" and c[2] == "stop") or (c[1] == "switch" and c[2] == "BENCH heater" and not c[3])
                                       or (c[1] == "number" and c[2] == "IRUN value"))]
     return bool(after) and not other, f"FAIL '{f[0]['step'][:40]}' at {t_f}; commands after {len(after)}; others {other[:3]}"
