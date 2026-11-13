@@ -69,3 +69,14 @@ Then TP-1 reruns on the sealed unit (old carriage, window to 22:00 PT) from this
   it. STOP then comes later than 2.8 s, and HB5 reports it.
 - The checks (HB1-HB5) move into `tools/bench/heartbeat_check.py` in this PR, so they can be rerun.
 - The full set (HB1-HB5, each with its sabotage, and HB4's dry runs) reruns on the new head.
+
+### Amendment 1 results (2026-11-12, head cca0448, this Windows PC): 9/9 as predicted
+
+`python tools/bench/heartbeat_check.py`, one run:
+- HB1 head: 1995 beats, 0 skipped; 6249 reads, all OK. Sabotage (no retries): PermissionError after
+  51 beats.
+- HB2 head: False after 0.52 s, nothing raised. Sabotage: PermissionError at once.
+- HB3 head: not OK, "stayed locked", after 0.21 s. Sabotage: OK returned.
+- HB4: `--sim` PASS; `--sim-guard drop-after-1` INCOMPLETE with STOP sent.
+- HB5 head: STOP and GuardLost 2.07 s after the last beat ("heartbeat is 2.1 s old"). Sabotage
+  (stale reading retried 5 s): STOP 7.11 s after the last beat, reported.
