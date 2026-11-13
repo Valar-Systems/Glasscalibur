@@ -16,6 +16,9 @@ OUT = pathlib.Path(__file__).parent / "out"
 HEARTBEAT = OUT / "guard-heartbeat.json"
 SITTING = OUT / "sitting.json"
 MAX_AGE_S = 2.0
+# On Windows a file can't be replaced while another process has it open (and a read can collide
+# with the replace): retry briefly (2026-11-bench-heartbeat-retry.md).
+RETRY_S, REPLACE_TRIES, READ_TRIES = 0.01, 50, 20
 MOVING = ("OPENING", "CLOSING")
 MOVE_PRESSES = ("Auto-Calibrate", "BENCH: fire scheduled open", "BENCH: fire scheduled close",
                 "BENCH: simulate stall")
@@ -23,19 +26,33 @@ MOVE_PRESSES = ("Auto-Calibrate", "BENCH: fire scheduled open", "BENCH: fire sch
 
 # ----------------------------------------------------------------------------- heartbeat
 def write_heartbeat(connected, watching, carriage, path=HEARTBEAT):
+    """True once written. If the replace stays refused, this beat is skipped (False); the next one
+    tries again, and a long run of skipped beats reads as stale to the scripts."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"t": time.time(), "connected": bool(connected), "watching": bool(watching),
                                "carriage": carriage, "pid": os.getpid()}), encoding="utf-8")
-    os.replace(tmp, path)
+    for _ in range(REPLACE_TRIES):
+        try:
+            os.replace(tmp, path)
+            return True
+        except PermissionError:
+            time.sleep(RETRY_S)
+    return False
 
 
 def guard_ok(path=HEARTBEAT, max_age=MAX_AGE_S, now=time.time):
     """(ok, reason) from the open guard's heartbeat file."""
-    try:
-        hb = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False, "no heartbeat from the open guard (is open_guard.py running?)"
+    for _ in range(READ_TRIES):
+        try:
+            hb = json.loads(path.read_text(encoding="utf-8"))
+            break
+        except PermissionError:
+            time.sleep(RETRY_S)
+        except (OSError, ValueError):
+            return False, "no heartbeat from the open guard (is open_guard.py running?)"
+    else:
+        return False, "the open guard's heartbeat file stayed locked"
     age = now() - hb.get("t", 0)
     if age > max_age:
         return False, f"the open guard's heartbeat is {age:.1f} s old"
