@@ -415,3 +415,34 @@ Before it: two development runs of the default dry run, disclosed in notes 1-2 a
 **Open guard:** O1 and its two sabotages, and O2, as registered.
 - O2's sabotage printed its first variant "NOT red" and its rerun variant "red as predicted", as the script prints
   both.
+
+### Amendment 5 note 4 — check and simulator fixes after the da928fe misses (Daniel, 2026-11-13; before the code)
+
+Daniel ruled on the six fixes below (question tool, 2026-11-13). The da928fe misses stay on record above. Nothing in
+the harness's own logic changes.
+
+**The fixes.**
+1. **A5-4b's check:** pairs the accepted probe's move line with the first STOP line *after it in the device log*,
+   instead of the first STOP at or after its time stamp.
+2. **A5-5b's check:** counts the commands at or after the FAIL row's time.
+3. **Command delay in the simulator:** it answers every cover open, close or set, and every button press, 0.5 s after
+   receiving it, which is closer to the bench (about 2 s per probe in the 2026-11-12 run). STOP, switches, selects
+   and numbers stay immediate, so the guard checks' stop distances are unchanged.
+4. **W2's sabotage:** removes the clean stop's STOP. Its patch must now match exactly once, or the check reports
+   an instrument fault.
+5. **The guard/prompt set's B1:** gets the folder that holds the window-guard checks.
+6. **`no-reheat`:** uses the fast-cooling sensor, as `state-lag` does.
+
+**Predictions for the rerun** (one head, one invocation, every check with its sabotage):
+- **`tp1_amend5_check.py`:** every line as predicted. A5-1, A5-1b, A5-2, A5-3, A5-4a-d (with the verdict pair),
+  A5-5a-b, A5-6 and the three B4 lines.
+  - A5-4b's head: STOP less than 1 s after the move line. Sabotage: 2 s or more.
+  - A5-4c's head: at least one void probe, then a later PASS for the same probe, and no FAIL row.
+  - A5-4d's head: at least one probe not run, and the result not PASS.
+  - A5-5b's head: only STOP and "IRUN value" at or after the FAIL.
+- **HB1-HB5:** 9 of 9.
+- **Guard and prompts** (B1, R1, I1, I2, P1, C1, C2): all as registered.
+- **Window guard** (B1, W1-W4, G1-G4): all as registered, including W2's sabotage caught.
+- **Open guard** (O1-O3): as registered.
+- **Then:** TP-1 on the sealed unit (old carriage), from this branch's head, in Daniel's window ending 13:00 PT,
+  only if every line above comes out as predicted.
