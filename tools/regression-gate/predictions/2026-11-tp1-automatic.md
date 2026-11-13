@@ -446,3 +446,15 @@ the harness's own logic changes.
 - **Open guard** (O1-O3): as registered.
 - **Then:** TP-1 on the sealed unit (old carriage), from this branch's head, in Daniel's window ending 13:00 PT,
   only if every line above comes out as predicted.
+
+### Amendment 5 note 5 — two tooling fixes after the 2496188 rerun (Daniel, 2026-11-13; before the change)
+
+- The 2496188 rerun: 25 of 26 as predicted in `tp1_amend5_check.py`; HB1-HB5 9 of 9; guard and prompts all as
+  registered, including B1, whose window-guard run reported all as registered (W2's sabotage caught); open guard
+  as registered. Miss: A5-5b's head. The clean stop sent only STOP and "IRUN value" (at 1328.25), but the check
+  compared those times with the FAIL row's time, which rows round to 0.1 s (1328.3), so it counted none. The
+  separate window-guard run stopped on a scratch folder left by B1's run (an instrument fault, no reading).
+- Fix 1: A5-5b's check counts commands at or after the FAIL row's time minus 0.05 s (the rows' rounding).
+- Fix 2: the window-guard checks and the guard/prompt set (whose B1 runs them) each get a new, empty scratch
+  folder per invocation (B1's holds a copy of the window-guard script); no folder from an earlier run is reused.
+- Predictions: every line as listed in note 4.
