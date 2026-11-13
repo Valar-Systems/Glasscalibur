@@ -199,3 +199,117 @@ M2 `find_unit.py`: given a neighbour table with two units, it returns only the a
 TP-1 does not start unless L1 learned the stroke: before its first command `tp1_run.py`
 requires **Open stroke** between 94.0 and 101.0 mm, and stops otherwise. Checked as O3 in
 `2026-11-bench-open-guard.md`.
+
+## Amendment 5 — harness: logged values, streamed log, gate margin, clean stop (review, 2026-11-12; before the code)
+
+Branch `bench/tp1-harness`, on top of `bench/heartbeat-retry` (5205da6). Nothing above is edited. What the
+harness does from now on:
+
+**A5-1 Warning value.**
+- The warning check reads the value the firmware acted on from the device log:
+  - its own line "Motor X degC - at or above the warning level (50)";
+  - the "'Motor Temperature': Sending state Y" line just before it (full precision).
+- Pass: exactly one warning event, and Y (or X when no state line is found) within 50.0-52.0.
+- A logged value below 50.0 is a miss.
+- Recorded as information only:
+  - the last API reading before the event;
+  - the first API reading at or after it;
+  - the order in which the event and the first reading of 50.0 or more arrived on the API.
+- The test build has no way to set a reading (its one injection, "BENCH: trip thermal lockout", runs the lockout
+  directly). So that order is taken from the run's own crossing of 50 °C, not from a step before any heat.
+- Registered for that crossing:
+  - if the event arrives before the state message, the device log shows 50.0 or more;
+  - a warning logged below 50.0 is a firmware threshold miss: the run takes the clean stop (A5-5) and reports.
+
+**A5-2 Device log on disk.**
+- Every device log line, and every row the script records, is appended to files in the run's folder
+  (`device-log.txt`, `tp1-rows.txt`), each line flushed as it is written.
+
+**A5-3 Phase A ends at 56.5 °C.**
+- During a phase-A heating move, the first reading of 56.5 or more makes the script send STOP at once.
+- If the strokes leave the reading between 55.0 and 56.5 (no stroke may start at 55 or above), the test build's
+  heater raises it to 56.5 without motion and is then switched off.
+
+**A5-4 Gate probes.**
+- **Covered:** the six cover probes, the scheduled close/open pair, and the Close that should cancel the pending
+  open.
+- **Precondition:** each is sent only if the latest reading is at least 55.5, checked less than 1 s before sending.
+- **Accepted:** any probe the unit accepts (State OPENING or CLOSING within 3 s) is stopped at once.
+- **Void:**
+  - a probe is void when the device log shows the firmware's latest reading below 55.0 at the probe's own log line
+    (its refusal line or its move line);
+  - a void probe is not a verdict.
+- **Retry:**
+  - a void probe, or one whose precondition isn't met, is retried once the reading is back at 55.5 or more;
+  - the heater does the reheating without motion when it can within 10 min; otherwise one heating stroke is made
+    once the reading is below 55;
+  - after 3 tries the probe is "not run".
+- **Miss:** a probe accepted while the firmware's reading was 55.0 or more.
+- **Overall:** TP-1 reports PASS only when every gate probe has a verdict (none void, none not run).
+
+**A5-5 Clean stop.**
+- One path does all of this: STOP, heater off, the no-motion settings put back (A5-6), the files flushed, the report
+  written.
+- **Taken on:**
+  - every FAIL row;
+  - the window's end;
+  - the guard lost;
+  - any unexpected error;
+  - an operator request: a file named `STOP` in the run's folder (checked about once a second, also during
+    moves), or Ctrl+C.
+- The process is ended from outside only if the clean stop itself fails, and that is recorded.
+
+**A5-6 Restore by register value.**
+- The saved settings add "IRUN value".
+- The restore and the clean stop put back "IRUN value" (a register value, exact) instead of re-entering the
+  Motor Current reading. Motor Current is still compared, within 20 mA.
+
+**Simulator (`tp1_sim.py`) additions**, used only by the checks below:
+- the warning and "Sending state" log lines;
+- the event reaching the API before the state message;
+- cooling after a stop, with the driver's mA-to-IRUN conversion (truncating; 957.54 mA full scale) and
+  "IRUN value";
+- faults:
+  - `warn-below-50`: the warning is logged at 49.8;
+  - `gate-open`: moves are accepted at 55 or more;
+  - `state-lag`: the API reading trails the firmware's by 6 s;
+  - `no-reheat`: the heater can't raise the reading, and strokes are refused;
+  - `exit-at-600`: the simulated process ends abruptly at virtual 600 s, after writing how many log lines it
+    produced;
+  - `operator-stop-at-700`: the `STOP` file appears at virtual 700 s, during a move.
+
+## Amendment 5 checks (dry runs; each with its sabotage)
+- **A5-1:**
+  - Default dry run: the warning check PASSes on the logged value (50.0-52.0), and the information rows give both
+    pairings and the order (event first).
+  - Sabotage: `warn-below-50` makes the warning check FAIL and the run take the clean stop.
+- **A5-2:** with `exit-at-600`, `device-log.txt` holds every line the simulator produced before the exit.
+  Sabotage: the same run with writes buffered and not flushed is missing lines.
+- **A5-3:**
+  - Default dry run: phase A's last heating move ends with the script's STOP less than 1 s after the first reading of
+    56.5 or more; or, if the strokes stop between 55.0 and 56.5, the heater reaches 56.5 with no move.
+  - Sabotage: the mid-move STOP removed, so no such STOP is recorded.
+- **A5-4:**
+  - (a) Default dry run: every gate probe is sent less than 1 s after a reading of 55.5 or more, and each is refused,
+    with none void. Sabotage: the precondition removed, so at least one probe goes out with the reading below 55.5.
+  - (b) `gate-open`: the first probe is accepted, STOP follows within 1 s, the row is a FAIL (a miss) and the run
+    takes the clean stop. Sabotage: the at-once STOP removed, so the accepted move runs longer than 1 s.
+  - (c) `state-lag`: a probe accepted while the device log shows the firmware below 55.0 is recorded void, stopped,
+    retried after reheating, then refused. Sabotage: void detection removed, so it is recorded as a miss.
+  - (d) `no-reheat`: a void or not-run probe remains and the run does not report PASS. Sabotage: a verdict that
+    ignores void and not-run reports PASS.
+- **A5-5:**
+  - (a) `operator-stop-at-700`: STOP within 1.5 s, heater off, report written ("stopped: operator"), log flushed.
+    Sabotage: the `STOP`-file check removed, so the run goes on past 702 s.
+  - (b) `rest-close-accepted` (B4's sabotage): after its FAIL row the run sends STOP and puts back the no-motion
+    settings, and sends no other command. Sabotage: the stop-on-FAIL removed, so commands continue after the FAIL.
+- **A5-6:** default dry run, where the simulated driver truncates mA to IRUN: after the restore, "IRUN value" and the
+  Motor Current reading equal the saved ones. Sabotage: the restore made through Motor Current (re-entering the
+  reading) ends one IRUN step lower.
+- **Full set:** these checks plus the registered dry-run sets, all as registered:
+  - B4, with its two sabotages, which now also take the clean stop;
+  - W1-W4 and G1-G3 (window guard);
+  - O1-O3 (open guard);
+  - R1, I1, I2, P1, C1, C2 (guard and prompts);
+  - HB1-HB5 (heartbeat).
+- **D:** the push gate passes.
