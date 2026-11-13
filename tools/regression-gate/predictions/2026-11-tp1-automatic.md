@@ -327,3 +327,18 @@ harness does from now on:
   information, as for the warning.
 - Check A5-1b: the default dry run passes both on the logged values. Sabotage: the lockout check
   paired with the API reading again reports FAIL (59.99) on the same run.
+
+### Amendment 5 note 2 — a fast-cooling profile for A5-4a and A5-4c (before those runs)
+
+- Development runs of the default dry run (disclosed, not counted) show the simulated reading
+  staying above 55.5 for the whole probe set: the probes take about 4 virtual seconds and the
+  simulated drop after a stop is slow. As registered, A5-4a's sabotage and A5-4c's void probe could
+  not show on it.
+- The simulator gains the profile `cool-fast`: the part of the reading added while moving is 3.0 °C
+  and falls away with a 4 s time constant (default 1.5 °C and 8 s), so the reading drops below 55.5
+  within seconds of phase A's STOP. `state-lag` uses the same sensor model.
+- A5-4a's head and sabotage both run on `cool-fast`. Head: every probe is sent less than 1 s after
+  a reading of 55.5 or more (reheating in between), none void. Sabotage: the precondition removed,
+  so at least one probe goes out with the reading below 55.5.
+- A5-4c as registered, on `state-lag` (now with the fast-cooling sensor).
+- Everything else in Amendment 5 is unchanged.
