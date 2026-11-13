@@ -45,3 +45,13 @@ HB4 The TP-1 dry run still comes out as registered: `tp1_run.py --sim` ends PASS
 D   The push gate passes (scan && commit; the PR comes later).
 
 Then TP-1 reruns on the sealed unit (old carriage, window to 22:00 PT) from this branch's head.
+
+## Results (2026-11-12, head bda6c02, this Windows PC): 8/8 as predicted
+
+- HB1 head: the writer made 1932 beats, skipped 0, raised nothing; the reader made 4397 reads, all OK.
+- HB1 sabotage (main's bench_common.py): the writer raised PermissionError after 39 beats; the reader
+  then got not-OK in 10751 of 11944 reads (stale heartbeat).
+- HB2 head: returned False after 0.51 s, raised nothing. Sabotage: PermissionError raised at once.
+- HB3 head: not OK, "the open guard's heartbeat file stayed locked", after 0.21 s. Sabotage: OK returned.
+- HB4: `tp1_run.py --sim` ended PASS; `--sim-guard drop-after-1` ended INCOMPLETE with STOP sent.
+- The check script (hb_test.py) is kept with the bench evidence; it goes into the PR with this file.
