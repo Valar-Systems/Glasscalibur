@@ -368,3 +368,50 @@ verdict is computed for a run with one gate probe not run and no FAIL row:
 
 **B4.** The two B4 sabotage profiles run in the same check script: each reports FAIL at its step and takes the clean
 stop.
+
+### Amendment 5 results (2026-11-12, head da928fe): misses, stopped here
+
+One invocation on da928fe:
+- `tp1_amend5_check.py`;
+- `heartbeat_check.py`;
+- the guard/prompt, window-guard and open-guard dry-run sets.
+
+Before it: two development runs of the default dry run, disclosed in notes 1-2 and not counted.
+
+**A5 and B4: 22 of 26 as predicted.**
+- **As predicted:**
+  - A5-1, A5-1b, A5-2, A5-3, A5-4a, A5-5a and A5-6, heads and sabotages;
+  - A5-4b's head;
+  - A5-4c's sabotage;
+  - A5-4d's verdict check, head and sabotage;
+  - A5-5b's sabotage;
+  - B4: the default dry run PASS, and both sabotage profiles FAIL at their step and take the clean stop.
+- **Miss: A5-4b's sabotage** (STOP 2 s late) was reported as 0.0 s.
+  - Phase A's STOP and the probe's move are logged at the same virtual second (1314.3). The check took the first STOP
+    at or after that time, which was phase A's, logged just before the move.
+  - In the device log the probe's own STOP came 2.0 s after its move (1314.3 to 1316.3).
+  - A check fault.
+- **Miss: A5-4c's head** (`state-lag`): no probe was void.
+  - All eight probes went out within about 4 virtual seconds of phase A's STOP.
+  - The lowest firmware reading at a probe was 55.27 (API reading 56.68).
+- **Miss: A5-4d's head** (`no-reheat`): no probe was left not run.
+  - All eight probes had their verdicts in the first seconds (firmware 56.23 or more), before any reheat was
+    needed.
+  - Phase B then could not heat: FAIL, "no progress in 40 moves", and the clean stop.
+- **Miss: A5-5b's head** (`rest-close-accepted`): the check counted only commands strictly after the FAIL row's time.
+  The clean stop's STOP and "IRUN value" share that time in the simulator, so it counted none. A check fault.
+
+**HB1-HB5:** 9 of 9 as predicted.
+
+**Guard and prompts:** R1, I1, I2, P1, C1, C2, each with its sabotage, as registered.
+- B1 had no reading (an instrument fault): the script runs the window-guard checks from its scratch folder, and an
+  empty folder was given. The same reading comes from the window-guard set below.
+
+**Window guard:** B1, W1, W2's head, W3, W4, G1-G4 as registered.
+- **Miss: W2's sabotage** (no end-of-window STOP) was not caught. Its patch text targets the STOP in the old
+  end-of-window code, which Amendment 5 moved into the clean stop. The patch matched nothing, so the "sabotage" copy
+  was the head.
+
+**Open guard:** O1 and its two sabotages, and O2, as registered.
+- O2's sabotage printed its first variant "NOT red" and its rerun variant "red as predicted", as the script prints
+  both.
