@@ -465,3 +465,5 @@ One invocation (18:24:08Z-18:25:32Z): `tp1_amend5_check.py` 26 of 26 as predicte
 pair, and B4's three lines); HB1-HB5 9 of 9; guard and prompts (B1, R1, I1, I2, P1, C1, C2) all as registered; window
 guard (B1, W1-W4, G1-G4) all as registered, W2's sabotage caught; open guard (O1-O3) as registered. TP-1 runs from
 this head next (Daniel's ruling, 2026-11-13).
+
+2026-11-13 · TP-1 run 3 (a42d1eb, old carriage): no TP-1 result. Preflight, the command checks, the S0 checks and the warning check came out as registered; the run ended in phase A, before the gate checks. Harness changes and a rerun follow.
