@@ -342,3 +342,29 @@ harness does from now on:
   so at least one probe goes out with the reading below 55.5.
 - A5-4c as registered, on `state-lag` (now with the fast-cooling sensor).
 - Everything else in Amendment 5 is unchanged.
+
+### Amendment 5 note 3 — retry after a void, `no-reheat`, and two check forms (before any counted run)
+
+Found by reading the code against the profiles. No fault profile has been run.
+
+**Retry after a void.**
+- The precondition reads the reading as the API delivers it, so under `state-lag` it can trail the firmware.
+- After a void probe the retry waits for that reading to go below 55.5 (at most 2 min), then reheats (A5-4) before
+  the next try. This is "once the reading is back at 55.5 or more".
+- Without the wait, the three tries could all go out while the lagging reading still shows 55.5 or more.
+
+**`no-reheat`.**
+- From the first STOP at 56 °C or more until the end of the run, the heater adds no heat and every move is refused.
+- The gate probes that need a reheat are therefore "not run".
+- Phase B cannot heat either, so the run ends in FAIL. That is "not PASS", as A5-4d's head predicts.
+
+**A5-4d's sabotage** is judged on the verdict alone, because the end-to-end run already ends in FAIL. The report's
+verdict is computed for a run with one gate probe not run and no FAIL row:
+- head: INCOMPLETE;
+- sabotage (the verdict ignores not-run): PASS.
+
+**A5-3's sabotage** is judged on the STOP record alone, as its text says: no STOP less than 1 s after a reading of
+56.5 or more is recorded. The head keeps its two alternatives.
+
+**B4.** The two B4 sabotage profiles run in the same check script: each reports FAIL at its step and takes the clean
+stop.
