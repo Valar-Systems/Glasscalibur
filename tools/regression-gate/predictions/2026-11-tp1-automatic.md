@@ -458,3 +458,10 @@ the harness's own logic changes.
 - Fix 2: the window-guard checks and the guard/prompt set (whose B1 runs them) each get a new, empty scratch
   folder per invocation (B1's holds a copy of the window-guard script); no folder from an earlier run is reused.
 - Predictions: every line as listed in note 4.
+
+### Amendment 5 results, rerun (2026-11-13, head df7bffb): all as predicted
+
+One invocation (18:24:08Z-18:25:32Z): `tp1_amend5_check.py` 26 of 26 as predicted (A5-1 to A5-6 with the verdict
+pair, and B4's three lines); HB1-HB5 9 of 9; guard and prompts (B1, R1, I1, I2, P1, C1, C2) all as registered; window
+guard (B1, W1-W4, G1-G4) all as registered, W2's sabotage caught; open guard (O1-O3) as registered. TP-1 runs from
+this head next (Daniel's ruling, 2026-11-13).
