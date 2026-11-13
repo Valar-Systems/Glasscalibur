@@ -313,3 +313,17 @@ harness does from now on:
   - R1, I1, I2, P1, C1, C2 (guard and prompts);
   - HB1-HB5 (heartbeat).
 - **D:** the push gate passes.
+
+### Amendment 5 note 1 — the lockout and clear values read the same way (before that code)
+
+- Found while coding A5-1: with the event reaching the API before its reading (the order A5-1
+  records), the two other checks that pair an event with the API reading are exposed the same way:
+  "lockout at the first reading >= 60 (60.0-62.0)" and "cleared at the first reading below 48 °C".
+  The simulator's first default dry run on the new code paired the lockout with 59.99 and reported
+  FAIL (a development run, disclosed, not counted).
+- Both now read the firmware's logged value as A5-1 does: "THERMAL LOCKOUT - motor X degC" and
+  "Thermal lockout cleared - motor X degC", each with the "Sending state" line just before it
+  (full precision). Ranges unchanged: 60.0-62.0, and below 48.0. Both pairings are recorded as
+  information, as for the warning.
+- Check A5-1b: the default dry run passes both on the logged values. Sabotage: the lockout check
+  paired with the API reading again reports FAIL (59.99) on the same run.
