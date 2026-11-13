@@ -214,7 +214,7 @@ def a55b(d):
     if not f:
         return False, "no FAIL row"
     t_f = f[0]["t_s"]
-    after = [c for c in d["cmds"] if c[0] >= t_f]          # note 4: at or after
+    after = [c for c in d["cmds"] if c[0] >= t_f - 0.05]   # notes 4-5: at or after, at the rows' 0.1 s rounding
     other = [c for c in after if not ((c[1] == "cover" and c[2] == "stop") or (c[1] == "switch" and c[2] == "BENCH heater" and not c[3])
                                       or (c[1] == "number" and c[2] == "IRUN value"))]
     return bool(after) and not other, f"FAIL '{f[0]['step'][:40]}' at {t_f}; commands after {len(after)}; others {other[:3]}"
