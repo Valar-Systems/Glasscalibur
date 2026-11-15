@@ -262,7 +262,7 @@ interval:
   - interval: 500ms
     then:
       # Driver status (packages/driver.yaml): a reset, a charge-pump undervoltage or
-      # a driver error -> stop, output off, re-apply the settings, position unknown.
+      # a driver error -> stop, output off, re-apply the settings.
       # While the driver is held, keep its output off (any new target would turn it
       # on by itself) and retry an unconfirmed re-apply once no lockout is latched.
       - lambda: |-

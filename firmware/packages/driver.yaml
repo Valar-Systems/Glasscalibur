@@ -3,8 +3,8 @@
 # =============================================================================
 # The unit reads the driver's status flags (GSTAT: reset, drv_err, uv_cp) in the
 # 500 ms check (packages/temperature.yaml). When one is set it stops, switches
-# the driver output off, makes the position unknown, re-applies every driver
-# setting (as at boot) and switches the driver back on once the settings are
+# the driver output off, re-applies every driver setting (as at boot) and
+# switches the driver back on once the settings are
 # confirmed. During a thermal lockout the driver output is off too, and comes
 # back on the same way after the lockout clears.
 #
@@ -47,7 +47,7 @@ script:
           id(driver_hold) = true;
           id(driver)->enable(false);            // driver output off first (stop() writes VACTUAL 0)
           ESP_LOGW("driver", "Driver status 0x%02x (%s%s%s) - stopped, driver output off; re-applying "
-                   "its settings; position unknown", (unsigned) gstat,
+                   "its settings", (unsigned) gstat,
                    (gstat & 1) ? "reset " : "", (gstat & 2) ? "drv_err " : "", (gstat & 4) ? "uv_cp" : "");
       - script.execute: motion_halt
       - if:
@@ -55,12 +55,6 @@ script:
             lambda: 'return id(cal_active);'
           then:
             - script.execute: cal_abort
-      - lambda: |-
-          id(pending_pos) = -1.0f;
-          id(pos_unknown) = true;
-          id(limit_faults) |= 8;
-      - script.execute: position_commit
-      - component.update: limit_fault_text
       - script.execute: driver_reconfigure
       - script.execute: driver_confirm
 
