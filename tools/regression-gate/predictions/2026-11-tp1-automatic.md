@@ -542,3 +542,12 @@ sends no states and no log lines, and every command after that raises a connecti
 - A6-3: the sensor updates every 3 s, so a heater command first waits up to 4 s for a reading at most 2 s old, and
   is not sent if none comes. Check (unit level, simulator): with the last reading made 3 s old and no new reading
   arriving, the heater-on is not sent. Sabotage: the age check removed, so it is sent.
+
+### Amendment 6 note 2 (before any check run): two instruments follow the code
+
+- W2's sabotage (window-guard checks) removes the clean stop's STOP. That line now sits inside the clean stop's
+  error handling, so the sabotage's patch text follows it (still exactly one match, or an instrument fault).
+- A5-4d's verdict check builds a run in isolation. Under A6-1 a run with phases or checks missing is INCOMPLETE
+  whatever else holds, so the check now first marks every phase done, every registered check PASS and the end
+  delivered, then adds one gate probe not run. Head: INCOMPLETE. Sabotage (not-run ignored): PASS. As registered.
+- Nothing else changes.
