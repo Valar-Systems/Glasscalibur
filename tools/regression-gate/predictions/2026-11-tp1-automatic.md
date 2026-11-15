@@ -467,3 +467,69 @@ guard (B1, W1-W4, G1-G4) all as registered, W2's sabotage caught; open guard (O1
 this head next (Daniel's ruling, 2026-11-13).
 
 2026-11-13 · TP-1 run 3 (a42d1eb, old carriage): no TP-1 result. Preflight, the command checks, the S0 checks and the warning check came out as registered; the run ended in phase A, before the gate checks. Harness changes and a rerun follow.
+
+## Amendment 6: verdict, data freshness, heater commands, guard data, undelivered STOP (review, 2026-11-14; before the code)
+
+On branch `bench/tp1-harness`. Nothing above is edited. From now on, the harness does the following.
+
+**A6-1 Verdict defaults to INCOMPLETE.**
+- The run keeps a list of the phases it must complete:
+  - preflight, Slow setup, S0, phase A, the gate probes, the phase A cool-down;
+  - phase B, the lockout checks, the cool-down with the pending open, the restore.
+- It also keeps a list of the checks registered for those phases.
+- PASS needs all three of:
+  1. every phase recorded as complete;
+  2. every registered check present and PASS;
+  3. the run's end delivered: the restore, or the clean stop with its STOP delivered.
+- Otherwise the result is FAIL if any check failed, and INCOMPLETE if not.
+- An error anywhere, an undelivered STOP, a phase not reached or a missing check never gives PASS.
+
+**A6-2 Data freshness.**
+- A reading older than 10 s counts as no reading. Every use of the motor reading goes through one accessor that
+  returns "none" when the last state is older than 10 s.
+- If there is no reading for 10 s at any point in the run (moving or not), the run takes the clean stop and ends
+  INCOMPLETE ("no reading for 10 s").
+
+**A6-3 Heater commands.**
+- The heater is switched on, or kept alive, only with a reading at most 2 s old. Otherwise the command is not sent
+  and the reheat counts as failed.
+- The TP-1 build already has firmware-side limits, so nothing is added there. It stops the heater:
+  - after 45 min on;
+  - after 30 s with no keepalive;
+  - when its own reading reaches 62 °C;
+  - when the script's connection closes;
+  - when a reading has been missing for 10 s;
+  - on a lockout.
+  - Source: tp1-bench.yaml, stop codes 1-7.
+
+**A6-4 Guard data.**
+- `open_guard.py` reports not watching once no state has come from the unit for 10 s while it is connected. This
+  counts the same as a lost connection.
+- The heartbeat then reads not OK, so moves are refused or stopped.
+
+**A6-5 Undelivered STOP.**
+- If the clean stop's STOP command raises an error, or the unit cannot be reached, the report's first line is
+  "unit state unknown - check the unit". The result is INCOMPLETE, or FAIL if a check failed.
+
+**Simulator** (used only by these checks): the fault `data-stop-at-700`, where from virtual 700 s the simulated unit
+sends no states and no log lines, and every command after that raises a connection error.
+
+### Checks (dry runs, each with a sabotage)
+- **A6-1:**
+  - (a) Default dry run: PASS, all phases complete. Sabotage: a phase skipped (the copy skips the gate probes) must
+    not give PASS.
+  - (b) A check dropped: a copy that never records "lockout at the first reading >= 60" must not give PASS.
+  - (c) An exception in the clean stop (`rest-close-accepted`, with a copy whose clean stop raises after STOP) must
+    not give PASS. That run's head gives FAIL from its registered miss.
+  - Sabotage for (b) and (c): the old verdict rule (PASS when no FAIL row) gives PASS.
+- **A6-2:** `data-stop-at-700`: the run takes the clean stop within 10-12 s of the last state, and ends INCOMPLETE
+  with "no reading for 10 s". Sabotage: the freshness check removed, so the run keeps going on the stale reading.
+- **A6-3:** a copy that makes the reading 3 s old before a heater-on: the heater command is not sent. Sabotage: the
+  age check removed, so it is sent.
+- **A6-4:** guard dry run against the simulator with `data-stop-at-700`: the heartbeat reads not OK within 12 s of
+  the last state. Sabotage: the data-age check removed, so it stays OK.
+- **A6-5:** `data-stop-at-700`: the report's first line is "unit state unknown - check the unit". Sabotage: the line
+  removed, and it is missing.
+- **Full set, all as registered:** these checks; Amendment 5's set and B4; W1-W4 and G1-G4; O1-O3; R1, I1, I2, P1,
+  C1, C2; HB1-HB5.
+- **D:** the push gate passes.
