@@ -30,6 +30,8 @@ and "Motor Current" reads back (IRUN + 1) / 32 of it. Faults:
   exit-at-600           the process ends abruptly at virtual 600 s, after writing how many log
                         lines it produced (sim-exit-count.txt in the run's folder)
   operator-stop-at-700  a file named STOP appears in the run's folder at virtual 700 s
+  data-stop-at-700      from virtual 700 s nothing reaches the API (no states, no log lines) and every
+                        command raises a connection error (Amendment 6)
 """
 import json, math, os, pathlib
 
@@ -91,6 +93,9 @@ class SimDevice:
     @property
     def current(self):
         return float(ma_of(self.irun))
+
+    def dark(self):
+        return self.fault == "data-stop-at-700" and self.t >= 700
 
     def no_reheat(self):
         return self.no_reheat_until is not None and self.t < self.no_reheat_until
@@ -155,6 +160,8 @@ class SimDevice:
                 "Close Limit Switch": self.actual <= 0.0, **self.vals}.get(name)
 
     async def cover(self, path, cmd, pos=None):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("cover", cmd))
         self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
         if cmd != "stop":
@@ -179,6 +186,8 @@ class SimDevice:
         return 200
 
     async def press(self, name):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("press", name))
         self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
         await self.sleep(CMD_DELAY_S)
@@ -211,6 +220,8 @@ class SimDevice:
                 self.cal_status, self.cal_until = "Calibrating...", self.t + 600
 
     async def switch(self, name, on):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("switch", name, bool(on)))
         self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
         if name == "Child Lock":
@@ -232,6 +243,8 @@ class SimDevice:
             self.speed = option
 
     async def number(self, name, value):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("number", name))
         self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
         if name == "Motor Current":
@@ -241,6 +254,8 @@ class SimDevice:
 
     # ---- firmware behaviour (documented)
     def log(self, line):
+        if self.dark():
+            return
         self.logs.append((self.t, line))
         if self.log_sink:
             self.log_sink(self.t, line)
@@ -361,7 +376,7 @@ class SimDevice:
             self.log(f"[D][sensor:094]: 'Motor Temperature': Sending state {self.fw:.5f} °C with 2 decimals of accuracy")
             self.on_reading(self.fw)
             self.api_queue.append((self.t + (6.0 if self.fault == "state-lag" else 0.05), self.fw))
-        while self.api_queue and self.t >= self.api_queue[0][0]:      # the state message reaches the API
+        while self.api_queue and self.t >= self.api_queue[0][0] and not self.dark():   # the state reaches the API
             self.reading = self.api_queue.pop(0)[1]
             self.seen["Motor Temperature"] = self.t
             self.temp_hist.append((self.t, self.reading))

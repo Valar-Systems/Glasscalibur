@@ -133,6 +133,10 @@ import tp1_run
 from tp1_sim import SimDevice
 out = pathlib.Path(tempfile.mkdtemp(prefix="a5-verdict-"))
 r = tp1_run.Run(SimDevice(), out)
+for c in getattr(tp1_run, "REQUIRED_CHECKS", ()):     # Amendment 6 note 2: complete in every other way
+    r.rec(c, "PASS")
+r.phases_done = set(getattr(tp1_run, "PHASES", ()))
+r.end_delivered = True
 r.rec("a gate probe that passed", "PASS")
 r.gate_notrun.append("api open refused (motor)")
 print(json.dumps({"result": r.report()}))

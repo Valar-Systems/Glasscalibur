@@ -113,6 +113,19 @@ async def watch(dev, guard, minutes_left, step=0.1, beat=None, reconnect=None):
                 else:
                     await dev.sleep(2)
                 continue
+            seen = dev.last_seen("Motor Temperature") if hasattr(dev, "last_seen") else -1e9
+            if seen > -1e8 and dev.now() - seen > 10.0:          # Amendment 6 (A6-4): no data counts as lost
+                if dev.now() - last_beat >= 0.5:
+                    beat(False, False)
+                    last_beat = dev.now()
+                if not lost:
+                    lost = True
+                    guard.rec("ALERT", "no data from the unit for 10 s: not watching (scripts won't move it)")
+                await dev.sleep(step)
+                continue
+            if lost:
+                lost = False
+                guard.rec("INFO", "data from the unit again: watching")
             await guard.poll()
             if dev.now() - last_beat >= 0.5:
                 beat(True, True)
