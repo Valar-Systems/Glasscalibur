@@ -23,6 +23,9 @@ substitutions:
   # "dev" for local/branch builds; the release workflow overrides it with the
   # git tag (-s fw_version) so shipped units report the version they run.
   fw_version: "dev"
+  # This file's folder, for paths ESPHome resolves against the top-level config's
+  # folder; configs elsewhere that include this one set it (tools/bench).
+  firmware_dir: "."
 
   # --- GPIO map -------------------------------------------------------------
   pin_uart_tx: "1"
@@ -93,6 +96,11 @@ esphome:
   project:
     name: "valar-systems.glasscalibur"
     version: "${fw_version}"
+  # The driver starts disabled at boot (see driver_disabled_at_boot.h).
+  build_flags:
+    - "-DGC_DRIVER_ENN_GPIO=${pin_enn}"
+  includes:
+    - "${firmware_dir}/driver_disabled_at_boot.h"
 
 packages:
   valar_core:
