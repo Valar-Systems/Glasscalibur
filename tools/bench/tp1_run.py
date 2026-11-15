@@ -8,16 +8,26 @@ and 600 mA; the test package's hold-current heater is the fallback, used only if
 peak below 60 °C. The script changes Speed, Motor Current and the calibration only as TP-1
 needs, and puts them back at the end.
 
-    python tools/bench/tp1_run.py --host <unit address> --mac <unit MAC> [--out DIR]
-    python tools/bench/tp1_run.py --sim [--mac MAC] [--sim-fault NAME]   # dry run (tp1_sim.py)
+    python tools/bench/tp1_run.py --host <unit address> --mac <unit MAC> --window-end HH:MM [--out DIR]
+    python tools/bench/tp1_run.py --sim [--mac MAC] [--sim-fault NAME] [--sim-window-left MIN]   # dry run
 
 Find the address with tools/bench/find_unit.py --mac <MAC from the USB flash>. Before its first
 command the script checks that the unit itself reports that MAC, and stops if it doesn't, so
 no other unit on the network can get these commands. Neither the address nor the MAC is
 written to the report or the log file.
 Thresholds: warning 50, gate 55, lockout 60, clear below 48 °C.
+Bench window (--window-end, Pacific time): it doesn't start with under 5 minutes left; when the
+window ends it sends STOP, turns the heater off, puts back what needs no motion (Motor Current)
+and reports the run as INCOMPLETE, naming anything not put back.
+Open guard interlock (bench_common.py): no move is sent unless open_guard.py is connected and
+watching; if it drops mid-move the script sends STOP and ends the run as INCOMPLETE. Prompts to
+Daniel show on top of his screen and are spoken. If Child Lock is on (bench_session.py turns it
+on for the sitting) it is turned off just before the Button 1 step and on again right after.
 """
 import argparse, asyncio, datetime, json, pathlib, re, sys, time, urllib.parse, urllib.request
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from bench_common import GuardLost, GuardMissing, MoveGate, Prompter, guard_ok  # noqa: E402
 
 WARN, GATE, LOCK, CLEAR = 50.0, 55.0, 60.0, 48.0
 BACKSTOP_C, STALE_S = 62.0, 10.0
@@ -27,6 +37,39 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 REDACT = [(re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"), "<ip>"),
           (re.compile(r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b"), "<mac>"),
           (re.compile(r"(glasscalibur-)[0-9a-fA-F]{6}\b"), r"\1XXXXXX")]
+
+
+class WindowOver(Exception):
+    pass
+
+
+def window_from(arg):
+    """--window-end HH:MM, Pacific time, today -> minutes left, as a function of the device."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Los_Angeles")
+    h, m = map(int, arg.split(":"))
+    end = datetime.datetime.now(tz).replace(hour=h, minute=m, second=0, microsecond=0)
+    return lambda dev: (end - datetime.datetime.now(tz)).total_seconds() / 60.0
+
+
+class Windowed:
+    """The device, with every wait checking the bench window (in 1 s slices)."""
+
+    def __init__(self, dev, minutes_left):
+        self._dev, self._left, self.off = dev, minutes_left, False
+
+    def __getattr__(self, name):
+        return getattr(self._dev, name)
+
+    async def sleep(self, s):
+        end = self._dev.now() + s
+        while True:
+            if not self.off and self._left(self._dev) <= 0:
+                raise WindowOver()
+            rest = end - self._dev.now()
+            if rest <= 0:
+                return
+            await self._dev.sleep(min(rest, 1.0))
 
 
 def redact(line):
@@ -39,6 +82,7 @@ E_ALERT, E_OBSTRUCTION, E_COVER = "Thermal Alert", "Obstruction", "Glasscalibur"
 E_SPEED, E_LOCKTEXT, E_CURRENT = "Speed", "Speed Lock", "Motor Current"
 E_CALSTAT, E_CALIBRATED, E_FW = "Calibration Status", "StallGuard calibrated", "Firmware Version"
 E_HEATER, E_HEATSTAT, E_KEEP = "BENCH heater", "BENCH heater status", "BENCH heater keepalive"
+E_CHILD = "Child Lock"
 SNAPSHOT = [E_SPEED, E_LOCKTEXT, E_CURRENT, E_CALSTAT, E_CALIBRATED, "SGTHRS (stall threshold)",
             "TCOOLTHRS", "Vibration Threshold", "StallGuard Enabled", "Vibration Stall Detection",
             "Child Lock"]
@@ -52,7 +96,7 @@ class RealDevice:
     def __init__(self, host):
         self.host, self.t0 = host, time.monotonic()
         self.states, self.events, self.logs, self.keys, self.kinds = {}, [], [], {}, {}
-        self.seen = {}
+        self.seen, self.connected = {}, False
 
     def now(self):
         return time.monotonic() - self.t0
@@ -63,13 +107,17 @@ class RealDevice:
     async def start(self):
         from aioesphomeapi import APIClient, LogLevel
         self.api = APIClient(self.host, 6053, None, client_info="glasscalibur-tp1")
-        await self.api.connect(login=True)
+        await self.api.connect(on_stop=self._on_stop, login=True)
+        self.connected = True
         self.mac = (await self.api.device_info()).mac_address
         infos, _ = await self.api.list_entities_services()
         for i in infos:
             self.keys[i.name], self.kinds[i.key] = i.key, (type(i).__name__, i.name)
         self.api.subscribe_states(self._on_state)
         self.api.subscribe_logs(self._on_log, log_level=LogLevel.LOG_LEVEL_DEBUG)
+
+    async def _on_stop(self, expected_disconnect):
+        self.connected = False
 
     def _on_state(self, st):
         kind, name = self.kinds.get(st.key, ("?", "?"))
@@ -131,6 +179,7 @@ class Run:
         self.heater_used = False
         self.moves_to = {GATE: None, LOCK: None}
         self.snapshot, self.after = {}, {}
+        self.prompt = Prompter(record_only=True)
 
     # --- helpers
     def T(self):
@@ -459,16 +508,25 @@ class Run:
             await self.dev.cover(path, "stop")
             self.check(f"{path} STOP works during the lockout",
                        await self.wait(lambda: self.logged(m, "COVER stop_action"), 3))
-        if self.snapshot.get("Child Lock"):
-            self.rec("Button 1 during the lockout", "NT", "Child Lock is on; left as it is")
-        else:
+        lock_was_on = bool(self.dev.get(E_CHILD))
+        if lock_was_on:
+            await self.dev.switch(E_CHILD, False)
+            await self.dev.sleep(2)
+            self.rec("Child Lock off for the Button 1 step", "INFO", f"Child Lock reads {self.dev.get(E_CHILD)}")
+        try:
             m = self.mark()
-            print("\a\n>>> Daniel: please press Button 1 once now (60 s). <<<\n", flush=True)
+            self.prompt.act("Daniel: press Button 1 once now (within 60 s)",
+                            say="Daniel, please press Button 1 once, now.")
             got = await self.wait(lambda: self.logged(m, "Close refused - thermal lockout"), 60)
             if got:
                 self.rec("Button 1 during the lockout: Close refused", "PASS")
             else:
                 self.rec("Button 1 during the lockout", "NT", "no press within 60 s")
+        finally:
+            if lock_was_on:
+                await self.dev.switch(E_CHILD, True)
+                await self.dev.sleep(2)
+                self.rec("Child Lock back on after the Button 1 step", "INFO", f"Child Lock reads {self.dev.get(E_CHILD)}")
 
     async def cooldown_pending(self, m_lock):
         await self.wait(lambda: (self.T() or 99) < 51.0, 60 * 60, poll=1)
@@ -562,8 +620,9 @@ class Run:
 
     def report(self):
         fails = [r for r in self.rows if r["verdict"] == "FAIL"]
+        cut_short = [r for r in self.rows if r["verdict"] == "INCOMPLETE"]
         obstructions = sum(1 for mv in self.moves if mv["obstruction"])
-        summary = {"result": "FAIL" if fails else "PASS", "moves_to_55": self.moves_to[GATE],
+        summary = {"result": "FAIL" if fails else "INCOMPLETE" if cut_short else "PASS", "moves_to_55": self.moves_to[GATE],
                    "moves_to_60": self.moves_to[LOCK], "false_obstruction_stops": obstructions,
                    "heater_used": self.heater_used, "before": self.snapshot, "after": self.after}
         (self.out / "tp1-report.json").write_text(json.dumps({"summary": summary, "steps": self.rows,
@@ -595,6 +654,10 @@ async def main():
     ap.add_argument("--mac", help="the unit's MAC, as the USB flash reported it")
     ap.add_argument("--sim", action="store_true")
     ap.add_argument("--sim-fault")
+    ap.add_argument("--window-end", help="end of the bench window, HH:MM Pacific (required with --host)")
+    ap.add_argument("--sim-window-left", type=float, help="sim only: minutes of window left at the start")
+    ap.add_argument("--sim-guard", default="ok",
+                    help="sim only: ok | missing | drop-after-MIN (the open guard's heartbeat in the dry run)")
     ap.add_argument("--out")
     a = ap.parse_args()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -605,8 +668,8 @@ async def main():
         from tp1_sim import SimDevice
         dev = SimDevice(fault=a.sim_fault)
     elif a.host:
-        if not a.mac:
-            ap.error("--mac is required with --host")
+        if not a.mac or not a.window_end:
+            ap.error("--mac and --window-end are required with --host")
         dev = RealDevice(a.host)
     else:
         ap.error("give --host <unit address> --mac <MAC>, or --sim")
@@ -620,15 +683,66 @@ async def main():
         await dev.close()
         return 2
     print("Unit identity: the unit reports the requested MAC.", flush=True)
+    if a.sim:
+        m0 = a.sim_window_left
+        left = (lambda d: m0 - d.now() / 60.0) if m0 is not None else (lambda d: 1e9)
+    else:
+        left = window_from(a.window_end)
+    if left(dev) < 5:
+        msg = f"{left(dev):.1f} min of the bench window left (under 5)"
+        print(f"NOT STARTED: {msg} - no command sent.")
+        (out / "tp1-report.md").write_text(f"# TP-1 not started: {msg}\n", encoding="utf-8")
+        await dev.close()
+        return 3
     await dev.sleep(5)                        # first states
-    run = Run(dev, out)
+    wdev = Windowed(dev, left)
+    prompt = Prompter(record_only=a.sim)
+    events = []
+
+    def on_event(kind, text):
+        events.append((kind, text))
+        prompt.alert(text, say="Bench script: " + ("stop sent, the open guard dropped." if kind == "stop"
+                                                    else "move not sent, the open guard is not watching."))
+    if a.sim:
+        g = a.sim_guard
+        if g == "ok":
+            check = lambda: (True, "sim: guard ok")
+        elif g == "missing":
+            check = lambda: (False, "no heartbeat from the open guard (is open_guard.py running?)")
+        else:
+            t_drop = float(g.split("drop-after-")[1]) * 60.0
+            check = lambda: (dev.now() < t_drop, "sim: the open guard's heartbeat is stale")
+    else:
+        check = guard_ok
+    gdev = MoveGate(wdev, check=check, on_event=on_event)
+    run = Run(gdev, out)
+    run.prompt = prompt
     try:
-        await run.run()
-        await run.restore()
+        try:
+            await run.run()
+            await run.restore()
+        except (WindowOver, GuardMissing, GuardLost) as why:
+            wdev.off = True
+            await dev.cover("api", "stop")
+            if dev.get(E_HEATER):
+                await dev.switch(E_HEATER, False)
+            s, back, not_back = run.snapshot, [], []
+            if s and s.get(E_CURRENT) is not None and dev.get(E_CURRENT) != s[E_CURRENT]:
+                await dev.number(E_CURRENT, s[E_CURRENT])
+                back.append("Motor Current")
+            if s and dev.get(E_SPEED) != s.get(E_SPEED):
+                not_back.append(f"Speed ({s.get(E_SPEED)}) and a calibration at it")
+            reason = "bench window ended" if isinstance(why, WindowOver) else str(why)
+            run.rec(reason, "INCOMPLETE",
+                    "STOP sent; heater off; put back: " + (", ".join(back) or "nothing needed")
+                    + "; NOT put back: " + (", ".join(not_back) or "nothing"))
     finally:
         if dev.get(E_HEATER):
             await dev.switch(E_HEATER, False)
         result = run.report()
+        (out / "tp1-prompts.json").write_text(json.dumps({"prompts": prompt.sent, "guard": events}, indent=1),
+                                              encoding="utf-8")
+        prompt.close()
         await dev.close()
     return 0 if result == "PASS" else 1
 

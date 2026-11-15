@@ -9,11 +9,6 @@ sensor). Local/branch builds report `dev`.
 This project adheres to [Semantic Versioning](https://semver.org/) and the
 format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [2.3.0] - unreleased
-
-### Changed
-- The driver starts disabled at boot.
-
 ## [2.2.0] - unreleased
 
 ### Added
@@ -116,6 +111,7 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   `/cover/Glasscalibur/open`.
 - Build: ESPHome pinned to 2026.6.5 (the version v2.1.0 shipped with) and both
   external components pinned to the commits v2.1.0 used.
+- The driver starts disabled at boot.
 
 ### Fixed
 - The unit no longer reboots every 15 minutes when no Home Assistant (native
@@ -224,8 +220,7 @@ auto-calibration sequence) live in the product layer.
 - Wi-Fi provisioning with no hardcoded credentials (fallback hotspot + captive
   portal, Improv over USB serial).
 
-[2.3.0]: https://github.com/Valar-Systems/Glasscalibur/compare/v2.2.0...main
-[2.2.0]: https://github.com/Valar-Systems/Glasscalibur/compare/v2.1.0...v2.2.0
+[2.2.0]: https://github.com/Valar-Systems/Glasscalibur/compare/v2.1.0...main
 [2.1.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.1.0
 [2.0.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v2.0.0
 [1.2.0]: https://github.com/Valar-Systems/Glasscalibur/releases/tag/v1.2.0
