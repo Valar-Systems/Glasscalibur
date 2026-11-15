@@ -551,3 +551,36 @@ sends no states and no log lines, and every command after that raises a connecti
   whatever else holds, so the check now first marks every phase done, every registered check PASS and the end
   delivered, then adds one gate probe not run. Head: INCOMPLETE. Sabotage (not-run ignored): PASS. As registered.
 - Nothing else changes.
+
+### Amendment 6 results (2026-11-14 PT, head 09f2617): one miss, stopped here
+
+One invocation (2026-11-15 02:42:25Z-02:43:56Z), one script after another:
+- `tp1_amend6_check.py`;
+- `tp1_amend5_check.py`;
+- `heartbeat_check.py`;
+- the guard/prompt, window-guard and open-guard dry-run sets, each in a fresh folder.
+
+**A6: 13 of 14 as predicted.**
+- **As predicted:**
+  - A6-1a, A6-1b and A6-1c, heads and sabotages;
+  - A6-2's sabotage;
+  - A6-3, A6-4 and A6-5, heads and sabotages.
+- **Miss: A6-2's head** (`data-stop-at-700`) reported as outside its window.
+  - The run stopped with "stopped: no reading for 10 s" at 709.5 s and ended INCOMPLETE.
+  - The registered window is "within 10-12 s of the last state". The check encoded it as fixed times, 710.0 to
+    712.5 s, as if the last state came at 700.0 s.
+  - In the run's device log the last Motor Temperature state came at 699.0 s (the sensor updates every 3 s), so the
+    stop came 10.5 s after it.
+  - A check fault, by this reading; the code and the result are not changed until a ruling.
+
+**The rest, all as registered:**
+- A5 and B4: 26 of 26.
+- HB1-HB5: 9 of 9.
+- Guard and prompts (B1, R1, I1, I2, P1, C1, C2).
+- Window guard (B1, W1-W4, G1-G4), W2's sabotage caught.
+- Open guard: O1 and its two sabotages, and O2.
+  - O2's sabotage printed its first variant "NOT red" and its rerun variant "red as predicted", as the script
+    prints both.
+
+**Not run in this invocation: O3** (TP-1 with Open stroke unknown stops before its first command). None of these
+scripts carries it. It goes into the rerun.
