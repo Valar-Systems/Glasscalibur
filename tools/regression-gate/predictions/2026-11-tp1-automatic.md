@@ -533,3 +533,12 @@ sends no states and no log lines, and every command after that raises a connecti
 - **Full set, all as registered:** these checks; Amendment 5's set and B4; W1-W4 and G1-G4; O1-O3; R1, I1, I2, P1,
   C1, C2; HB1-HB5.
 - **D:** the push gate passes.
+
+### Amendment 6 note 1 (before the code): A6-1(c) and A6-3 made checkable
+
+- A6-1(c) runs on `operator-stop-at-700`, not `rest-close-accepted`. That run has no FAIL row, so the old
+  rule would give PASS if the clean stop failed before writing its row (as in the 2026-11-13 run). The copy's clean
+  stop raises right after sending STOP. Head (new verdict): not PASS. Sabotage (old rule): PASS.
+- A6-3: the sensor updates every 3 s, so a heater command first waits up to 4 s for a reading at most 2 s old, and
+  is not sent if none comes. Check (unit level, simulator): with the last reading made 3 s old and no new reading
+  arriving, the heater-on is not sent. Sabotage: the age check removed, so it is sent.
