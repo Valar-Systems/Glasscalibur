@@ -33,3 +33,16 @@ The owner (2026-11-15): add the image-GPS CI check to this repo, the same check 
 ### Note 1 (before the code)
 - The docstring's three usage lines name `scripts/check_image_gps.py`. Here they say `tools/check_image_gps.py`. So the
   copy differs from Ropener's in the docstring's provenance lines and those three path lines, nothing else.
+
+## Results (2026-11-16, head fab05bf, Windows, Python 3.14.6)
+- **G1:** 24 rows, all ok; "selftest PASSED: 24 rows"; exit 0. As predicted.
+- **G2:** the control ok (exit 0, 24 rows, none red). All 11 sabotages turned exactly their rows red; "SABOTAGE
+  PASSED"; exit 0. As predicted.
+- **G3:** "image gps: 94 tracked file(s), 94 read; findings 0", then "image gps: OK"; exit 0. As predicted.
+- **G4:** a local clone of fab05bf with no remote.
+  - Control: 94 files, findings 0, exit 0.
+  - Plant: a 100-byte JPEG built by the script's own selftest builders, committed as docs/images/planted-gps.jpg in
+    the clone only. 95 files, findings 1, "FINDING exif-gps: docs/images/planted-gps.jpg", exit 1. As predicted.
+- **The push gate's scan:** the code commit first hit the product-claims scan 5 times, on a variable name in the HEIF
+  parser. The owner cleared it with 5 scoped exemptions for those exact lines; the copy is unchanged. Then 0 hits.
+- G5 (CI) follows on the pull request.
