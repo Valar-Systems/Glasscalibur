@@ -584,3 +584,76 @@ One invocation (2026-11-15 02:42:25Z-02:43:56Z), one script after another:
 
 **Not run in this invocation: O3** (TP-1 with Open stroke unknown stops before its first command). None of these
 scripts carries it. It goes into the rerun.
+
+### Amendment 5 rerun record: correction note (ruling 77 a, 2026-11-16)
+- The rerun record above says "open guard (O1-O3) as registered". O3 can't be confirmed: no script in that set
+  carried O3. The line above is left as it was. O3 now has its own line (Amendment 6 note 3).
+
+### Amendment 6 note 3 (ruling 77 a; before the code and before any rerun)
+The A6-2 miss is a check fault (ruling 77 a) and stays on the record. Changes, all in the check scripts:
+- **A6-2's window:** measured from the run's own last "Motor Temperature" state line in its device-log.txt. The stop
+  row "stopped: no reading for 10 s" comes 10.0-12.0 s after it, and the result is INCOMPLETE. The sabotage is
+  unchanged (freshness removed: no such row, and the run goes on past 712.5 s).
+- **O3, its own line** (in tp1_amend6_check.py):
+  - Head: tp1_run.py --sim --sim-fault fresh (Open stroke not learned). The L1 stroke check is recorded FAIL, the
+    simulated unit receives no command, and the result is FAIL.
+  - Sabotage: a copy without the early return after the L1 check sends at least one command.
+- **Readings must match their registered reason**, not only an outcome or a return code. In every check script of
+  the set (tp1_amend6_check.py, tp1_amend5_check.py, heartbeat_check.py, and the private guard/prompt, window-guard
+  and open-guard sets), and in the private #35 harness:
+  - (1) Captured output is stripped of terminal escape codes (CSI and OSC sequences) before any text match.
+  - (2) Captured output containing "Filename too long" makes the reading an instrument fault. It prints
+    "INSTRUMENT", is counted neither as predicted nor as a miss, and may be rerun with disclosure.
+  - (3) A run that leaves neither a report nor rows is "no reading", an instrument fault the same way.
+  - (4) Each sabotage (and each head whose registered outcome is "not PASS") is "as predicted" only with its reason:
+    - A6-1a sab: INCOMPLETE with "gate" in phases_missing.
+    - A6-1b head: INCOMPLETE with the dropped check in checks_missing. A6-1b sab: PASS.
+    - A6-1c head: INCOMPLETE, no clean-stop row, phases missing. A6-1c sab: PASS with no clean-stop row.
+    - A6-2 sab: no "no reading" row, and rows after 712.5 s.
+    - A6-3 sab: heater-on sent. A6-4 sab: no not-OK beat within 12 s of the last state.
+    - A6-5 sab: first line "# TP-1 automatic".
+    - O3 sab: at least one command.
+    - A5-1 sab: warning row FAIL, plus the "miss: one warning event" clean-stop row.
+    - A5-1b sab: lockout row present and FAIL.
+    - A5-2 sab: exit count read, and fewer lines on disk.
+    - A5-3 sab: no STOP-gap row at all.
+    - A5-4a sab: a probe sent below 55.5 or late.
+    - A5-4b sab: move-to-STOP gap measured, >= 1.0 s.
+    - A5-4c sab: no void row.
+    - A5-4d verdict sab: PASS.
+    - A5-5a sab: rows after 702 s.
+    - A5-5b sab: a FAIL row, then a command other than STOP or a put-back.
+    - A5-6 sab: Speed/Current row FAIL naming IRUN value.
+    - HB1 sab: writer raised PermissionError. HB2 sab: PermissionError raised. HB3 sab: OK returned, "refused read
+      taken as OK". HB5 sab: STOP more than 5 s after the last beat.
+    - The private sets' sabotages:
+      - R1: no "reconnected", and the open not stopped.
+      - I1: the open sent.
+      - I2: no STOP.
+      - P1: missing from the record.
+      - C1: Button Lock left on.
+      - W1: no "NOT STARTED", and commands sent.
+      - W2: no STOP at the end.
+      - G3: no FAIL, firmware target reached.
+      - O1: STOP at 97.0-97.5 / hard-stop hit.
+      - O2: close ended on S5, not stopped, stroke learned.
+    - The C2 heads (exit 4) also need their "NOT STARTED" message.
+- **Matcher check M1** (new tools/bench/check_reading.py, which the scripts import):
+  - --selftest:
+    - M1a: an error line with ESC[K codes around the name is found after stripping;
+    - M1b: output with "Filename too long" is an instrument fault;
+    - M1c: clean output is neither.
+  - --sabotage: a copy whose strip does nothing turns M1a red; a copy without the "Filename too long" rule turns M1b
+    red; exactly their rows, each.
+- **Full set rerun, once, on one head** (all as registered):
+  - A6-1 to A6-5 with O3;
+  - Amendment 5's set and B4;
+  - HB1-HB5;
+  - the guard/prompt, window-guard and open-guard sets;
+  - M1 selftest and sabotage.
+  - No instrument fault is expected (nothing in this set compiles or clones).
+- The #35 harness (dk_checks.py, private) gets the same rules (P-X's sabotage then runs from a short path). It is
+  exercised through M1, and not rerun for this merge: #35's results stand as reported.
+- Then the push gate, a PR to main, and a squash merge when everything comes out as registered (bench tooling only,
+  ruling 77 a). The branch also carries #34's heartbeat retry (HB1-HB5 in this set). #34 is closed as included in
+  the merge.
