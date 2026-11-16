@@ -111,6 +111,7 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   `/cover/Glasscalibur/open`.
 - Build: ESPHome pinned to 2026.6.5 (the version v2.1.0 shipped with) and both
   external components pinned to the commits v2.1.0 used.
+- The driver starts disabled at boot.
 
 ### Fixed
 - The unit no longer reboots every 15 minutes when no Home Assistant (native
