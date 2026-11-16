@@ -7,7 +7,7 @@ Runs each check on this folder's bench_common.py and on a patched copy (its sabo
 with no unit. Uses its own temporary heartbeat files, never out/guard-heartbeat.json. Prints, per
 check, the registered outcome next to the observed one.
 """
-import asyncio, json, os, pathlib, shutil, subprocess, sys, tempfile, time
+import asyncio, json, os, pathlib, re, shutil, subprocess, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).parent
 PY = sys.executable
@@ -35,14 +35,18 @@ SAB = {  # name: [(old, new), ...] applied to a copy of bench_common.py
          "            pass\n        age = now() - hb.get(\"t\", 0)\n"),
     ],
 }
-results = []
+sys.path.insert(0, str(HERE))
+from check_reading import Judge, strip  # noqa: E402
+J = Judge()
 
 
-def report(name, predicted, ok, detail):
-    got = "PASS" if ok else "FAIL"
-    results.append(got == predicted)
-    print(f"{'as predicted' if got == predicted else 'MISS        '}  {name}: predicted {predicted}, got {got}  ({detail})",
-          flush=True)
+def report(name, predicted, ok, detail, reason=True):
+    J.report(name, predicted, ok, strip(detail), reason=reason)
+
+
+def hb5_after(det):
+    m = re.search(r"'stop_after_last_beat_s': ([0-9.]+)", det)
+    return float(m.group(1)) if m else None
 
 
 def copy_with(sab):
@@ -180,13 +184,14 @@ def hb4():
 if __name__ == "__main__":
     head = str(HERE)
     ok, det = hb1(head); report("HB1 head (stress 20 s)", "PASS", ok, det)
-    ok, det = hb1(copy_with("no-retry")); report("HB1 sabotage: no retries", "FAIL", ok, det)
+    ok, det = hb1(copy_with("no-retry")); report("HB1 sabotage: no retries", "FAIL", ok, det, reason="PermissionError" in det)
     ok, det = hb2(head); report("HB2 head (replace always refused)", "PASS", ok, det)
-    ok, det = hb2(copy_with("no-retry")); report("HB2 sabotage: no retries", "FAIL", ok, det)
+    ok, det = hb2(copy_with("no-retry")); report("HB2 sabotage: no retries", "FAIL", ok, det, reason="PermissionError" in det)
     ok, det = hb3(head); report("HB3 head (read always refused)", "PASS", ok, det)
-    ok, det = hb3(copy_with("refused-read-ok")); report("HB3 sabotage: refused read taken as OK", "FAIL", ok, det)
+    ok, det = hb3(copy_with("refused-read-ok")); report("HB3 sabotage: refused read taken as OK", "FAIL", ok, det,
+                                                       reason="refused read taken as OK" in det)
     ok, det = hb4(); report("HB4 head (TP-1 dry runs)", "PASS", ok, det)
     ok, det = hb5(head); report("HB5 head (writer stops mid-move)", "PASS", ok, det)
-    ok, det = hb5(copy_with("stale-retry")); report("HB5 sabotage: stale reading retried 5 s", "FAIL", ok, det)
-    print(f"\n{sum(results)}/{len(results)} as predicted")
-    sys.exit(0 if all(results) else 1)
+    ok, det = hb5(copy_with("stale-retry")); report("HB5 sabotage: stale reading retried 5 s", "FAIL", ok, det,
+                                                    reason=(hb5_after(det) or 0) > 5.0)
+    sys.exit(J.summary())

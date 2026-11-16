@@ -11,6 +11,8 @@ import json, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).parent
 PY = sys.executable
+sys.path.insert(0, str(HERE))
+from check_reading import Judge, instrument, strip  # noqa: E402
 SAB = {  # name: (file, old, new) applied to a copy of this folder
     "pair-api": ("tp1_run.py", "        t_lock = y if y is not None else x\n", "        t_lock = ev[0][3] if ev else None\n"),
     "no-flush": ("tp1_run.py", '    log_f = open(out / "device-log.txt", "a", encoding="utf-8")\n\n    def sink(t, line):\n'
@@ -33,14 +35,12 @@ SAB = {  # name: (file, old, new) applied to a copy of this folder
     "restore-by-ma": ("tp1_run.py", "        if s.get(E_IRUN) is not None:\n            await self.dev.number(E_IRUN, s[E_IRUN])\n",
                       "        if s.get(E_IRUN) is not None:\n            await self.dev.number(E_CURRENT, s[E_CURRENT])\n"),
 }
-results = []
+J = Judge()
 _copies = {}
 
 
-def report(name, predicted, ok, detail):
-    got = "PASS" if ok else "FAIL"
-    results.append(got == predicted)
-    print(f"{'as predicted' if got == predicted else 'MISS        '}  {name}: predicted {predicted}, got {got}  ({detail})", flush=True)
+def report(name, predicted, ok, detail, reason=True, fault=None):
+    J.report(name, predicted, ok, detail, reason=reason, fault=fault)
 
 
 def code_dir(sab):
@@ -73,6 +73,7 @@ def run(fault=None, sab=None):
     d["probes"] = json.loads((out / "probes.json").read_text(encoding="utf-8")) if (out / "probes.json").exists() else []
     d["cmds"] = json.loads((out / "sim-commands.json").read_text(encoding="utf-8")) if (out / "sim-commands.json").exists() else []
     d["result"] = (d["report"] or {}).get("summary", {}).get("result")
+    d["fault"] = instrument(strip(p.stdout + p.stderr)) or (None if (d["report"] or d["rows"]) else "no reading (no report, no rows)")
     return d
 
 
@@ -109,6 +110,7 @@ def a52(d):
         n = int((d["out"] / "sim-exit-count.txt").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False, "no exit count"
+    d["_n"] = n
     return len(d["log"]) >= n, f"simulator produced {n} lines; device-log.txt holds {len(d['log'])}; exit code {d['rc']}"
 
 
@@ -163,6 +165,7 @@ def a54a(d):
     void = (d["report"] or {}).get("summary", {}).get("gate_probes", {}).get("void")
     gp = [r for r in d["rows"] if "refused (motor)" in r["step"] or r["step"].startswith(("scheduled close then open", "a refused Close"))]
     refused = all(r["verdict"] == "PASS" for r in gp if "void" not in r["step"] and "not run" not in r["step"])
+    d["_bad"] = bad
     return not bad and void == 0 and refused and len(gp) >= 8, f"probes {len(pr)}; sent below 55.5 or late {len(bad)}" + \
         (f" (first {bad[0]})" if bad else "") + f"; void {void}; gate rows {len(gp)}; all refused {refused}"
 
@@ -178,6 +181,7 @@ def a54b(d):
             nxt = next((j for j in range(idx[-1] + 1, len(lines)) if "COVER stop_action" in lines[j]), None)
             gap = round(float(lines[nxt][:9]) - float(lines[idx[-1]][:9]), 2) if nxt is not None else None
     miss = rows(d, "miss:", "INCOMPLETE")
+    d["_gap"] = gap
     ok = bool(acc) and gap is not None and gap < 1.0 and bool(miss)
     return ok, f"accepted probes {len(acc)}; move-to-STOP {gap} s; clean stop rows {len(miss)}"
 
@@ -231,31 +235,66 @@ def a56(d):
 
 if __name__ == "__main__":
     d0 = run()
-    report("A5-1 head (default): warning on the logged value, pairing recorded, event first", "PASS", *a51(d0))
-    report("A5-1 sabotage (warn-below-50): warning FAIL and clean stop", "FAIL", *a51_sab(run("warn-below-50")))
-    report("A5-1b head (default): lockout and clear on the logged values", "PASS", *a51b(d0))
-    report("A5-1b sabotage (lockout paired with the API reading)", "FAIL", *a51b(run(sab="pair-api")))
-    report("A5-2 head (exit-at-600): every line on disk", "PASS", *a52(run("exit-at-600")))
-    report("A5-2 sabotage (buffered, not flushed)", "FAIL", *a52(run("exit-at-600", "no-flush")))
-    report("A5-3 head (default): phase A STOP < 1 s after 56.5, or heater to 56.5", "PASS", *a53(d0))
-    report("A5-3 sabotage (no mid-move STOP): no STOP recorded", "FAIL", *a53_stop(run(sab="no-mid-stop")))
-    report("A5-4a head (cool-fast): every probe after a reading >= 55.5 < 1 s before, none void, all refused", "PASS", *a54a(run("cool-fast")))
-    report("A5-4a sabotage (cool-fast, precondition removed)", "FAIL", *a54a(run("cool-fast", "no-precondition")))
-    report("A5-4b head (gate-open): accepted, STOP < 1 s, miss, clean stop", "PASS", *a54b(run("gate-open")))
-    report("A5-4b sabotage (gate-open, STOP 2 s late)", "FAIL", *a54b(run("gate-open", "late-stop")))
-    report("A5-4c head (state-lag): void, stopped, retried, refused", "PASS", *a54c(run("state-lag")))
-    report("A5-4c sabotage (state-lag, void detection removed)", "FAIL", *a54c(run("state-lag", "no-void")))
-    report("A5-4d head (no-reheat): a not-run probe left, result not PASS", "PASS", *a54d(run("no-reheat")))
+    F = lambda d: d["fault"]
+    report("A5-1 head (default): warning on the logged value, pairing recorded, event first", "PASS", *a51(d0), fault=F(d0))
+    d = run("warn-below-50")
+    w = rows(d, "one warning event; the firmware's logged value")
+    report("A5-1 sabotage (warn-below-50): warning FAIL and clean stop", "FAIL", *a51_sab(d),
+           reason=bool(w) and w[0]["verdict"] == "FAIL" and bool(rows(d, "miss: one warning event", "INCOMPLETE")), fault=F(d))
+    report("A5-1b head (default): lockout and clear on the logged values", "PASS", *a51b(d0), fault=F(d0))
+    d = run(sab="pair-api")
+    lk = rows(d, "lockout at the first reading >= 60")
+    report("A5-1b sabotage (lockout paired with the API reading)", "FAIL", *a51b(d),
+           reason=bool(lk) and lk[0]["verdict"] == "FAIL", fault=F(d))
+    d = run("exit-at-600")
+    report("A5-2 head (exit-at-600): every line on disk", "PASS", *a52(d), fault=F(d))
+    d = run("exit-at-600", "no-flush")
+    ok, det = a52(d)
+    report("A5-2 sabotage (buffered, not flushed)", "FAIL", ok, det, reason="_n" in d and len(d["log"]) < d["_n"], fault=F(d))
+    report("A5-3 head (default): phase A STOP < 1 s after 56.5, or heater to 56.5", "PASS", *a53(d0), fault=F(d0))
+    d = run(sab="no-mid-stop")
+    report("A5-3 sabotage (no mid-move STOP): no STOP recorded", "FAIL", *a53_stop(d),
+           reason=not rows(d, "heating move stopped at 56.5", "INFO"), fault=F(d))
+    d = run("cool-fast")
+    report("A5-4a head (cool-fast): every probe after a reading >= 55.5 < 1 s before, none void, all refused", "PASS", *a54a(d), fault=F(d))
+    d = run("cool-fast", "no-precondition")
+    ok, det = a54a(d)
+    report("A5-4a sabotage (cool-fast, precondition removed)", "FAIL", ok, det, reason=bool(d.get("_bad")), fault=F(d))
+    d = run("gate-open")
+    report("A5-4b head (gate-open): accepted, STOP < 1 s, miss, clean stop", "PASS", *a54b(d), fault=F(d))
+    d = run("gate-open", "late-stop")
+    ok, det = a54b(d)
+    report("A5-4b sabotage (gate-open, STOP 2 s late)", "FAIL", ok, det,
+           reason=d.get("_gap") is not None and d["_gap"] >= 1.0, fault=F(d))
+    d = run("state-lag")
+    report("A5-4c head (state-lag): void, stopped, retried, refused", "PASS", *a54c(d), fault=F(d))
+    d = run("state-lag", "no-void")
+    report("A5-4c sabotage (state-lag, void detection removed)", "FAIL", *a54c(d),
+           reason=not [r for r in d["rows"] if ": void (firmware reading below" in r["step"]], fault=F(d))
+    d = run("no-reheat")
+    report("A5-4d head (no-reheat): a not-run probe left, result not PASS", "PASS", *a54d(d), fault=F(d))
     report("A5-4d verdict head (one probe not run, no FAIL): INCOMPLETE", "PASS", *a54d_verdict(code_dir(None)))
-    report("A5-4d verdict sabotage (verdict ignores not-run): PASS", "FAIL", *a54d_verdict(code_dir("verdict-ignores-notrun")))
-    report("A5-5a head (operator-stop-at-700)", "PASS", *a55a(run("operator-stop-at-700")))
-    report("A5-5a sabotage (STOP-file check removed)", "FAIL", *a55a_sab(run("operator-stop-at-700", "no-stopfile")))
-    report("A5-5b head (rest-close-accepted): only STOP and put-backs after the FAIL", "PASS", *a55b(run("rest-close-accepted")))
-    report("A5-5b sabotage (no stop on FAIL)", "FAIL", *a55b(run("rest-close-accepted", "no-stop-on-fail")))
-    report("A5-6 head (default): IRUN value and Motor Current as before", "PASS", *a56(d0))
-    report("B4 head (default): PASS", "PASS", d0["result"] == "PASS", f"result {d0['result']}")
-    report("B4 sabotage rest-close-accepted: FAIL at that step, clean stop", "PASS", *b4(run("rest-close-accepted"), "rest close refused (motor)"))
-    report("B4 sabotage refused-close-no-cancel: FAIL at that step, clean stop", "PASS", *b4(run("refused-close-no-cancel"), "a refused Close cancels"))
-    report("A5-6 sabotage (restore through Motor Current)", "FAIL", *a56(run(sab="restore-by-ma")))
-    print(f"\n{sum(results)}/{len(results)} as predicted")
-    sys.exit(0 if all(results) else 1)
+    ok, det = a54d_verdict(code_dir("verdict-ignores-notrun"))
+    report("A5-4d verdict sabotage (verdict ignores not-run): PASS", "FAIL", ok, det, reason=det == "verdict PASS")
+    d = run("operator-stop-at-700")
+    report("A5-5a head (operator-stop-at-700)", "PASS", *a55a(d), fault=F(d))
+    d = run("operator-stop-at-700", "no-stopfile")
+    report("A5-5a sabotage (STOP-file check removed)", "FAIL", *a55a_sab(d),
+           reason=bool([r for r in d["rows"] if r["t_s"] > 702.0]), fault=F(d))
+    d = run("rest-close-accepted")
+    report("A5-5b head (rest-close-accepted): only STOP and put-backs after the FAIL", "PASS", *a55b(d), fault=F(d))
+    d = run("rest-close-accepted", "no-stop-on-fail")
+    ok, det = a55b(d)
+    report("A5-5b sabotage (no stop on FAIL)", "FAIL", ok, det,
+           reason=det.startswith("FAIL '") and not det.endswith("others []"), fault=F(d))
+    report("A5-6 head (default): IRUN value and Motor Current as before", "PASS", *a56(d0), fault=F(d0))
+    report("B4 head (default): PASS", "PASS", d0["result"] == "PASS", f"result {d0['result']}", fault=F(d0))
+    d = run("rest-close-accepted")
+    report("B4 sabotage rest-close-accepted: FAIL at that step, clean stop", "PASS", *b4(d, "rest close refused (motor)"), fault=F(d))
+    d = run("refused-close-no-cancel")
+    report("B4 sabotage refused-close-no-cancel: FAIL at that step, clean stop", "PASS", *b4(d, "a refused Close cancels"), fault=F(d))
+    d = run(sab="restore-by-ma")
+    r6 = rows(d, "Speed and Motor Current as before")
+    report("A5-6 sabotage (restore through Motor Current)", "FAIL", *a56(d),
+           reason=bool(r6) and r6[0]["verdict"] == "FAIL" and "IRUN value" in r6[0]["detail"], fault=F(d))
+    sys.exit(J.summary())
