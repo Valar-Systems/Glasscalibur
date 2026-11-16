@@ -657,3 +657,45 @@ The A6-2 miss is a check fault (ruling 77 a) and stays on the record. Changes, a
 - Then the push gate, a PR to main, and a squash merge when everything comes out as registered (bench tooling only,
   ruling 77 a). The branch also carries #34's heartbeat retry (HB1-HB5 in this set). #34 is closed as included in
   the merge.
+
+### Amendment 6 note 3 results (2026-11-16, head 57693ff): three misses, stopped here, not merged
+One invocation (20:34:25Z-20:36:01Z), one script after another.
+
+**Matcher M1:** selftest M1a-M1c ok. Sabotage: S-NOSTRIP turns M1a red, S-NOFAULT turns M1b red. As predicted.
+
+**A6 with O3: 13 of 16 as predicted.**
+- **As predicted:**
+  - A6-1a head and sabotage (INCOMPLETE, phases missing ['gate']).
+  - A6-1b sabotage (PASS under the old rule).
+  - A6-1c head (INCOMPLETE, no clean-stop row, 7 phases missing) and sabotage (PASS, no clean-stop row).
+  - A6-2 head: last state 699.0, stop row at 709.5 = +10.5 s, INCOMPLETE.
+  - A6-3, A6-4 and A6-5, heads and sabotages.
+  - O3 head: L1 FAIL, 0 commands, result FAIL.
+- **Miss: A6-1b head.** "Registered reason not seen". The reading is INCOMPLETE with checks missing ['lockout at the
+  first reading >= 60']. The check listed is the dropped one, under its registered prefix. The new reason predicate
+  looked for the full row name "lockout at the first reading >= 60 (60.0-62.0)". A check fault.
+- **Miss: A6-2 sabotage.** "Registered reason not seen".
+  - The reading has no "no reading for 10 s" row (as originally registered). But it has no rows after 712.5 s
+    either: the run ends at 709.5 s with "stopped: unexpected error ConnectionError", at its next command after the
+    simulator's cut-off.
+  - Note 3's added reason ("the run goes on past 712.5 s") was wrong in fact.
+- **Miss: O3 sabotage.** Predicted "at least one command"; read 0 commands, result FAIL.
+  - Removing the early return after L1 changes nothing: since Amendment 5, a FAIL row itself takes the clean stop
+    ("miss: L1 has learned the stroke ..." at 5.0 s). The sabotage was ineffective, so O3's sensitivity is not shown.
+- **Proposed** (needs a ruling):
+  - A6-1b's reason matches the registered prefix;
+  - A6-2's sabotage reason is "no 'no reading for 10 s' row" (as first registered), with the stop row's reason
+    recorded;
+  - O3's sabotage makes the L1 check pass with the stroke unknown (its condition forced true), so the run must
+    then send a command.
+  - Then the full set reruns once.
+
+**The rest, all as registered:**
+- A5 and B4: 26 of 26.
+- HB1-HB5: 9 of 9.
+- Guard and prompts: 23 lines, ALL PASS, including C1's sabotage "the lock left on" and both C2 lines with "NOT
+  STARTED" said.
+- Window guard: 17 lines, ALL PASS (W1's sabotage now asserts its patch matches once).
+- Open guard: O1 and its two sabotages, O2, and O2's rerun variant.
+
+**No instrument fault.** Background: the run was registered with bgcheck and the check after it read 0 running.
