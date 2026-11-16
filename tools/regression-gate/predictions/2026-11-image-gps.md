@@ -29,3 +29,7 @@ The owner (2026-11-15): add the image-GPS CI check to this repo, the same check 
   - The planted file is never pushed anywhere.
 - **G5 CI:** the pull request's image-gps job passes all three steps, and the firmware build job still passes.
 - **D:** the push gate passes on the diff, the commit messages and the PR text.
+
+### Note 1 (before the code)
+- The docstring's three usage lines name `scripts/check_image_gps.py`. Here they say `tools/check_image_gps.py`. So the
+  copy differs from Ropener's in the docstring's provenance lines and those three path lines, nothing else.
