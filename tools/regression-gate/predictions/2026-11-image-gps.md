@@ -46,3 +46,5 @@ The owner (2026-11-15): add the image-GPS CI check to this repo, the same check 
 - **The push gate's scan:** the code commit first hit the product-claims scan 5 times, on a variable name in the HEIF
   parser. The owner cleared it with 5 scoped exemptions for those exact lines; the copy is unchanged. Then 0 hits.
 - G5 (CI) follows on the pull request.
+- **G5 (CI on 4f2456c):** the image-gps job passed in 13 s, with "selftest PASSED: 24 rows", "SABOTAGE PASSED" and
+  "image gps: 94 tracked file(s), 94 read; findings 0", "image gps: OK". The firmware build passed. As predicted.
