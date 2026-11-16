@@ -1,0 +1,25 @@
+# Refuse any tracked image that carries a GPS position (the owner, 2026-11-15). The check, its selftest and its
+# sabotages are tools/check_image_gps.py, copied from Valar-Systems/Ropener (#46/#47), which ported it from
+# Valar-Systems/valar-scopes PR #716. There is no allowlist: an image with GPS is fixed by stripping the GPS, never by
+# excusing the file.
+name: image-gps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  image-gps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Selftest (24 synthetic rows)
+        run: python3 tools/check_image_gps.py --selftest
+      - name: Sabotage (each plant must redden exactly its rows)
+        run: python3 tools/check_image_gps.py --sabotage
+      - name: Every tracked image
+        run: python3 tools/check_image_gps.py
