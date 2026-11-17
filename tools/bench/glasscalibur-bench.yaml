@@ -9,6 +9,7 @@
 # stop the motor, then stall_response. The release targets never include it.
 substitutions:
   firmware_dir: "../../firmware"   # the product's folder, from here
+  s5_trip_log: "true"              # log "S5 triggered at N steps" before the re-zero
 
 packages:
   glasscalibur: !include ../../firmware/glasscalibur.yaml
