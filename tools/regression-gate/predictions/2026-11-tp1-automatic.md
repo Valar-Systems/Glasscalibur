@@ -720,3 +720,28 @@ The three misses of the note 3 results stay on the record, as check and registra
 - **Then:** the full set reruns once, on one head (A6-1 to A6-5, A6-2b, O3; A5 and B4; HB1-HB5; the guard/prompt,
   window-guard and open-guard sets; M1). If everything comes out as registered: push gate, PR, CI, squash merge
   (bench tooling only), and #34 closed as included.
+
+### Amendment 6 note 4 results (2026-11-17 04:32:05Z-04:33:30Z, head f445e22): one miss, stopped here, not merged
+- Predicate review done before the run (private record): two mismatches fixed first (HB1 now reads the writer's
+  result only; G3 also needs the firmware target, 101.0 mm).
+- **Matcher M1:** selftest and sabotage as predicted.
+- **A6 with A6-2b and O3: 17 of 18.**
+  - As predicted:
+    - A6-1a/1b/1c heads and sabotages (A6-1b head: INCOMPLETE with the prefix in checks_missing);
+    - A6-2 head (+10.5 s after the last state at 699.0, INCOMPLETE) and sabotage (no "no reading" row);
+    - A6-2b head (states-stop-at-700, commands succeed: stop row at 709.5 = +10.5 s, INCOMPLETE);
+    - A6-3, A6-4 and A6-5;
+    - O3 head (L1 FAIL, 0 commands, FAIL) and sabotage (L1 forced true: 54 commands).
+  - **Miss: A6-2b sabotage** (freshness removed). Registered: "the run goes on past 712 s".
+    - Reading: no "no reading for 10 s" row and no rows after 712 s. The run ended at 709.5 s on
+      "miss: script backstop: no reading for 10 s while moving", the harness's older in-move backstop
+      (tp1_run.py line 314), with result FAIL.
+    - The sabotage removes only the A6 freshness check, so the older backstop still stops a run that is moving.
+    - My registration fault: I took the outcome from the ruling's wording without checking for the older backstop.
+- **The rest, all as registered:** A5 and B4 26/26; HB1-HB5 9/9; guard and prompts ALL PASS; window guard ALL PASS;
+  open guard O1, O2 and O2's rerun variant.
+- **Proposed** (needs a ruling): either
+  - (a) the A6-2b sabotage also removes the in-move backstop, so the run goes on past 712 s as registered; or
+  - (b) A6-2b's sabotage is re-registered as "no 'no reading for 10 s' row; the run ends on the in-move backstop (FAIL)
+    or goes on past 712 s".
+  - Then rerun once and merge if everything comes out as registered.
