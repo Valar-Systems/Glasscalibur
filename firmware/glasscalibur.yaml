@@ -73,6 +73,10 @@ substitutions:
   open_persist_delta_mm: "0.05"    # write flash only when the learned value moves more
   close_overtravel_mm:   "0.6"     # a close may run this far past zero; the carriage
                                    #   meets the front plate ≥ 0.7 mm past S5
+  drv_reach_mm:          "1.3"     # after a driver-status stop, the next full Close and
+                                   #   full Open (learned stroke) may run this much further,
+                                   #   so they still end on their switch (packages/driver.yaml)
+  s5_trip_log:           "false"   # the bench build logs the count at each S5 trip
   coast_limit_mm:        "0.3"     # S4 stop coast above this is logged as a WARN
   cal_sg_floor:        "80"        # min acceptable SG_RESULT during a clean calibration travel
   cal_vib_backstop:    "0.45"      # vibration threshold floor held during calibration probes

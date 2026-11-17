@@ -122,6 +122,7 @@ binary_sensor:
                   const int32_t learned = id(open_stroke_steps);
                   ESP_LOGI("limit", "S4 triggered at %d steps (%.2f mm)", (int) trig, trig / spm);
                   id(limit_faults) &= ~2;          // the open switch works
+                  id(drv_reach) = false;           // a switch reached: normal limits again
                   // Only a press DURING an open that started from a fresh S5
                   // home with no stall teaches the stroke; any S4 press ends
                   // that open's chance to.
@@ -208,6 +209,11 @@ binary_sensor:
             condition:
               lambda: 'return id(global_state) != 1;'
             then:
+              - lambda: |-
+                  if (${s5_trip_log})
+                    ESP_LOGI("limit", "S5 triggered at %d steps (%.2f mm)", (int) id(driver)->current_position,
+                             id(driver)->current_position / ${steps_per_mm});
+                  id(drv_reach) = false;           // a switch reached: normal limits again
               - stepper.report_position:
                   id: driver
                   position: 0

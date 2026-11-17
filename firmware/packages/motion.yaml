@@ -602,7 +602,7 @@ script:
           id: driver
           target: !lambda |-
             return id(open_stroke_steps) > 0
-                ? id(open_stroke_steps) + (int32_t) (${open_margin_mm} * ${steps_per_mm})
+                ? id(open_stroke_steps) + (int32_t) ((${open_margin_mm} + (id(drv_reach) ? ${drv_reach_mm} : 0.0f)) * ${steps_per_mm})
                 : (int32_t) (${open_default_mm} * ${steps_per_mm});
       - cover.template.publish:
           id: glasscalibur_cover
@@ -628,7 +628,7 @@ script:
           speed: !lambda "return ${effective_speed};"
       - stepper.set_target:
           id: driver
-          target: !lambda "return -(int32_t) (${close_overtravel_mm} * ${steps_per_mm});"
+          target: !lambda "return -(int32_t) ((${close_overtravel_mm} + (id(drv_reach) ? ${drv_reach_mm} : 0.0f)) * ${steps_per_mm});"
       - cover.template.publish:
           id: glasscalibur_cover
           current_operation: CLOSING

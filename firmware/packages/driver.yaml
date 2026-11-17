@@ -19,6 +19,13 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  # Set by a driver-status stop: the count may be off by up to about 1.2 mm, so the
+  # next full Close and full Open (learned stroke) may run drv_reach_mm further and
+  # still end on their switch. Cleared by S4 or S5. Not saved: a restart clears it.
+  - id: drv_reach
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   # IFCNT (the driver's count of received writes) when driver_reconfigure started.
   - id: driver_ifcnt_before
     type: int
@@ -46,6 +53,7 @@ script:
       - lambda: |-
           id(driver_hold) = true;
           id(driver)->enable(false);            // driver output off first (stop() writes VACTUAL 0)
+          id(drv_reach) = true;                 // the next full Close / Open may run drv_reach_mm further
           ESP_LOGW("driver", "Driver status 0x%02x (%s%s%s) - stopped, driver output off; re-applying "
                    "its settings", (unsigned) gstat,
                    (gstat & 1) ? "reset " : "", (gstat & 2) ? "drv_err " : "", (gstat & 4) ? "uv_cp" : "");
