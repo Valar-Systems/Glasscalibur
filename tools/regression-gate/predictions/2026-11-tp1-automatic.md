@@ -699,3 +699,24 @@ One invocation (20:34:25Z-20:36:01Z), one script after another.
 - Open guard: O1 and its two sabotages, O2, and O2's rerun variant.
 
 **No instrument fault.** Background: the run was registered with bgcheck and the check after it read 0 running.
+
+### Amendment 6 note 4 (ruling 82 a; before the code and before any rerun)
+The three misses of the note 3 results stay on the record, as check and registration faults in the new code.
+- **(1) A6-1b head:** the reason is "INCOMPLETE, with the registered prefix 'lockout at the first reading >= 60' in
+  checks_missing" (the prefix as REQUIRED_CHECKS lists it, not the full row name).
+- **(2) A6-2 sabotage:** the reason returns to the original registration: no "stopped: no reading for 10 s" row. The
+  row that ended the run is recorded alongside, not judged.
+- **(3) O3 sabotage:** the copy forces the L1 stroke check's condition true while the stroke is unknown. The run must
+  go on and send at least one command (reason: commands > 0).
+- **(4) A6-2b, new:** a simulator profile `states-stop-at-700`. From virtual 700 s no states and no log lines reach
+  the API, but commands still succeed: run 3's situation while the connection stayed up.
+  - Head: the clean stop's "stopped: no reading for 10 s" row comes 10.0-12.0 s after the run's own last Motor
+    Temperature state (from its device log), and the result is INCOMPLETE.
+  - Sabotage (freshness removed, the A6-2 copy): no such row, and the run goes on past 712 s (rows with t_s > 712.0).
+- **Predicate review (82 a), done before the run:** each reason predicate in the scripts is listed against its
+  registered wording, in the private record. Any mismatch is fixed before the run, not after.
+- **Paths:** the bench branch now lives at E:\gc\wg (owner instruction, 2026-11-16). The private sets and the open
+  guard set read the bench folder from there.
+- **Then:** the full set reruns once, on one head (A6-1 to A6-5, A6-2b, O3; A5 and B4; HB1-HB5; the guard/prompt,
+  window-guard and open-guard sets; M1). If everything comes out as registered: push gate, PR, CI, squash merge
+  (bench tooling only), and #34 closed as included.
