@@ -32,6 +32,8 @@ and "Motor Current" reads back (IRUN + 1) / 32 of it. Faults:
   operator-stop-at-700  a file named STOP appears in the run's folder at virtual 700 s
   data-stop-at-700      from virtual 700 s nothing reaches the API (no states, no log lines) and every
                         command raises a connection error (Amendment 6)
+  states-stop-at-700    from virtual 700 s no states and no log lines reach the API, but commands still
+                        succeed (Amendment 6 note 4, A6-2b)
 """
 import json, math, os, pathlib
 
@@ -96,6 +98,10 @@ class SimDevice:
 
     def dark(self):
         return self.fault == "data-stop-at-700" and self.t >= 700
+
+    def quiet(self):
+        """No states and no log lines reach the API (data-stop-at-700 and states-stop-at-700)."""
+        return self.dark() or (self.fault == "states-stop-at-700" and self.t >= 700)
 
     def no_reheat(self):
         return self.no_reheat_until is not None and self.t < self.no_reheat_until
@@ -254,7 +260,7 @@ class SimDevice:
 
     # ---- firmware behaviour (documented)
     def log(self, line):
-        if self.dark():
+        if self.quiet():
             return
         self.logs.append((self.t, line))
         if self.log_sink:
@@ -376,7 +382,7 @@ class SimDevice:
             self.log(f"[D][sensor:094]: 'Motor Temperature': Sending state {self.fw:.5f} °C with 2 decimals of accuracy")
             self.on_reading(self.fw)
             self.api_queue.append((self.t + (6.0 if self.fault == "state-lag" else 0.05), self.fw))
-        while self.api_queue and self.t >= self.api_queue[0][0] and not self.dark():   # the state reaches the API
+        while self.api_queue and self.t >= self.api_queue[0][0] and not self.quiet():  # the state reaches the API
             self.reading = self.api_queue.pop(0)[1]
             self.seen["Motor Temperature"] = self.t
             self.temp_hist.append((self.t, self.reading))

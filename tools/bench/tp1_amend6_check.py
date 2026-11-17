@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """TP-1 Amendment 6 dry-run checks (A6-1 to A6-5) and O3, each with its sabotage — BENCH ONLY
-(tools/regression-gate/predictions/2026-11-tp1-automatic.md, Amendment 6 and notes 1-3).
+(tools/regression-gate/predictions/2026-11-tp1-automatic.md, Amendment 6 and notes 1-4).
 
     python tools/bench/tp1_amend6_check.py
 
@@ -17,7 +17,8 @@ from check_reading import Judge, instrument, strip  # noqa: E402
 PY = sys.executable
 OLD_RULE = ('        return "PASS" if complete and not cut_short else "INCOMPLETE"\n',
             '        return "INCOMPLETE" if cut_short else "PASS"\n')
-DROPPED = "lockout at the first reading >= 60 (60.0-62.0)"
+DROPPED = "lockout at the first reading >= 60 (60.0-62.0)"   # the row name the sabotage removes
+DROPPED_PREFIX = "lockout at the first reading >= 60"         # as REQUIRED_CHECKS lists it (note 4)
 SAB = {  # name: [(file, old, new), ...] applied to a copy of this folder
     "skip-gate": [("tp1_run.py", "            await self.gate_checks()\n            self.phases_done.add(\"gate\")\n"
                    "            await self.phase_a_cooldown()\n            self.phases_done.add(\"phase_a_cool\")\n            a_done = True\n",
@@ -33,10 +34,8 @@ SAB = {  # name: [(file, old, new), ...] applied to a copy of this folder
     "no-guard-data": [("open_guard.py", "            if seen > -1e8 and dev.now() - seen > 10.0:", "            if False:")],
     "no-unknown-line": [("tp1_run.py", '        md = ((["**unit state unknown - check the unit**", ""] if self.stop_undelivered else [])\n',
                          '        md = (([] if self.stop_undelivered else [])\n')],
-    "no-stroke-stop": [("tp1_run.py", "                          stroke is not None and stroke == stroke and 94.0 <= stroke <= 101.0, str(stroke)):\n"
-                        "            return False\n",
-                        "                          stroke is not None and stroke == stroke and 94.0 <= stroke <= 101.0, str(stroke)):\n"
-                        "            pass\n")],
+    "force-l1": [("tp1_run.py", "                          stroke is not None and stroke == stroke and 94.0 <= stroke <= 101.0, str(stroke)):\n",
+                  "                          True, str(stroke)):\n")],          # note 4: L1 passes with the stroke unknown
 }
 SAB["drop-check+old-rule"] = SAB["drop-check"] + [("tp1_run.py",) + OLD_RULE]
 SAB["stop-raises+old-rule"] = SAB["stop-raises"] + [("tp1_run.py",) + OLD_RULE]
@@ -140,6 +139,12 @@ def a62(d):
         (f" (+{round(r[0]['t_s'] - last, 2)} s)" if r and last is not None else "") + f"; result {d['result']}"
 
 
+def ended_by(d):
+    """The row that ended the run (recorded, not judged; note 4)."""
+    inc = [x for x in d["rows"] if x["verdict"] == "INCOMPLETE"]
+    return f"{inc[-1]['t_s']} '{inc[-1]['step'][:50]}'" if inc else "no INCOMPLETE row"
+
+
 def clean_stop_rows(d):
     return [x for x in d["rows"] if x["step"].startswith(("stopped:", "miss:"))]
 
@@ -157,7 +162,7 @@ if __name__ == "__main__":
     db = run(sab="drop-check")
     J.report("A6-1b head (a check dropped): not PASS", "PASS", db["result"] != "PASS",
              f"result {db['result']}; checks missing {db['s'].get('checks_missing')}",
-             reason=db["result"] == "INCOMPLETE" and DROPPED in (db["s"].get("checks_missing") or []), fault=db["fault"])
+             reason=db["result"] == "INCOMPLETE" and DROPPED_PREFIX in (db["s"].get("checks_missing") or []), fault=db["fault"])
     dbo = run(sab="drop-check+old-rule")
     J.report("A6-1b sabotage (old rule): not PASS", "FAIL", dbo["result"] != "PASS", f"result {dbo['result']}",
              reason=dbo["result"] == "PASS", fault=dbo["fault"])
@@ -174,9 +179,18 @@ if __name__ == "__main__":
     J.report("A6-2 head (data-stop-at-700): clean stop 10.0-12.0 s after the run's last state, INCOMPLETE", "PASS",
              *a62(dd), fault=dd["fault"])
     dn = run("data-stop-at-700", "no-freshness")
-    late = [x for x in dn["rows"] if x["t_s"] > 712.5]
-    J.report("A6-2 sabotage (freshness removed)", "FAIL", *a62(dn), reason=not stop_rows(dn) and bool(late),
-             fault=dn["fault"])
+    ok, det = a62(dn)
+    J.report("A6-2 sabotage (freshness removed)", "FAIL", ok, det + f"; the run ended on {ended_by(dn)}",
+             reason=not stop_rows(dn), fault=dn["fault"])          # note 4: the original registered reason
+    db2 = run("states-stop-at-700")
+    J.report("A6-2b head (states-stop-at-700, commands succeed): clean stop 10.0-12.0 s after the last state, INCOMPLETE",
+             "PASS", *a62(db2), fault=db2["fault"])
+    dn2 = run("states-stop-at-700", "no-freshness")
+    ok, det = a62(dn2)
+    late2 = [x for x in dn2["rows"] if x["t_s"] > 712.0]
+    J.report("A6-2b sabotage (freshness removed): the run goes on past 712 s", "FAIL", ok,
+             det + f"; rows after 712 s {len(late2)}; the run ended on {ended_by(dn2)}",
+             reason=not stop_rows(dn2) and bool(late2), fault=dn2["fault"])
     h = snippet(HEATER, None)
     J.report("A6-3 head: reading 3 s old, heater-on not sent", "PASS", h.get("heater_on_sent") is False, str(h),
              fault=h.get("fault"))
@@ -202,8 +216,8 @@ if __name__ == "__main__":
     J.report("O3 head (fresh: Open stroke not learned): L1 FAIL, no command, result FAIL", "PASS",
              bool(l1) and l1[0]["verdict"] == "FAIL" and n3 == 0 and o3["result"] == "FAIL",
              f"L1 {[x['verdict'] for x in l1]}; commands {n3}; result {o3['result']}", fault=o3["fault"])
-    o3s = run("fresh", "no-stroke-stop")
+    o3s = run("fresh", "force-l1")
     n3s = len(o3s["cmds"]) if o3s["cmds"] is not None else None
-    J.report("O3 sabotage (no early return after L1): commands sent", "FAIL", n3s == 0, f"commands {n3s}; result {o3s['result']}",
+    J.report("O3 sabotage (L1 forced true): commands sent", "FAIL", n3s == 0, f"commands {n3s}; result {o3s['result']}",
              reason=bool(n3s), fault=o3s["fault"])
     sys.exit(J.summary())

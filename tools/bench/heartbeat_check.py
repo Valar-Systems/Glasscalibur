@@ -184,7 +184,7 @@ def hb4():
 if __name__ == "__main__":
     head = str(HERE)
     ok, det = hb1(head); report("HB1 head (stress 20 s)", "PASS", ok, det)
-    ok, det = hb1(copy_with("no-retry")); report("HB1 sabotage: no retries", "FAIL", ok, det, reason="PermissionError" in det)
+    ok, det = hb1(copy_with("no-retry")); report("HB1 sabotage: no retries", "FAIL", ok, det, reason="PermissionError" in det.split("; reader")[0])
     ok, det = hb2(head); report("HB2 head (replace always refused)", "PASS", ok, det)
     ok, det = hb2(copy_with("no-retry")); report("HB2 sabotage: no retries", "FAIL", ok, det, reason="PermissionError" in det)
     ok, det = hb3(head); report("HB3 head (read always refused)", "PASS", ok, det)
