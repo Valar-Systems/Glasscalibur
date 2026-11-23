@@ -14,8 +14,28 @@ Open-guard profiles: fresh (not learned, booted on S5), fresh-s4-never (S4 never
 fresh-trimmed / fresh-trimmed-s4-never (the same on the trimmed carriage: S4 99.3, stop 101.41),
 fresh-unreferenced (not learned, carriage really 30 mm out while the firmware believes 0),
 fresh-unreferenced-near (the same, 0.4 mm out: a close then ends on S5).
+
+Amendment 5 (2026-11-tp1-automatic.md): the firmware's reading and the API's are kept apart. Each
+reading is logged ("'Motor Temperature': Sending state ..."), acted on, and reaches the API a
+moment later, so an event raised by a reading arrives before that reading's state message. While
+the motor moves the sensor reads up to 1.5 °C above its slow value, and that part falls away
+within about 15 s of a stop. The driver turns mA into IRUN by truncation (957.54 mA full scale)
+and "Motor Current" reads back (IRUN + 1) / 32 of it. Faults:
+  warn-below-50         the warning is raised (and logged) at 49.8
+  gate-open             moves are accepted at 55 °C or more
+  cool-fast             the moving part of the reading is 3.0 °C with a 4 s time constant
+  state-lag             the API reading trails the firmware's by 6 s (with the cool-fast sensor)
+  no-reheat             from the first STOP at 56 °C or more to the end of the run, the heater
+                        adds no heat and every move is refused (with the cool-fast sensor)
+  exit-at-600           the process ends abruptly at virtual 600 s, after writing how many log
+                        lines it produced (sim-exit-count.txt in the run's folder)
+  operator-stop-at-700  a file named STOP appears in the run's folder at virtual 700 s
+  data-stop-at-700      from virtual 700 s nothing reaches the API (no states, no log lines) and every
+                        command raises a connection error (Amendment 6)
+  states-stop-at-700    from virtual 700 s no states and no log lines reach the API, but commands still
+                        succeed (Amendment 6 note 4, A6-2b)
 """
-import math
+import json, math, os, pathlib
 
 AMBIENT, TAU_S, LAG_S = 22.0, 2400.0, 30.0
 K_MOVE, K_HEAT = 0.050, 0.012          # °C/s at 600 mA moving / at IHOLD 19 standing
@@ -24,6 +44,17 @@ BACKOFF_MM = 24_500 / SPM
 S4_MM, HARD_MM, DEFAULT_MM = 95.5, 99.1, 101.0
 TRIMMED_S4_MM, TRIMMED_HARD_MM = 99.3, 101.41   # trimmed carriage (profiles fresh-trimmed*)
 SPEEDS = {"Slow": 1200, "Medium": 2600, "Fast": 5500}
+FULL_SCALE_MA = 957.54                  # 0.325 V / (0.22 + 0.02) ohm / sqrt(2)
+BOOST_MAX, BOOST_UP_S, BOOST_DOWN_S = 1.5, 20.0, 8.0
+CMD_DELAY_S = 0.5                       # cover open/close/set and presses (note 4); STOP stays immediate
+
+
+def irun_of(ma):
+    return max(0, min(31, int(32.0 * ma / FULL_SCALE_MA - 1.0)))
+
+
+def ma_of(irun):
+    return int((irun + 1) / 32.0 * FULL_SCALE_MA) if irun else 0
 
 
 class SimDevice:
@@ -36,6 +67,10 @@ class SimDevice:
         self.logs, self.events, self.seen = [], [], {}
         self.core = self.sens = 30.0
         self.reading, self.next_read, self.next_bench = 30.0, 0.0, 0.0
+        self.fw, self.boost, self.api_queue, self.temp_hist = 30.0, 0.0, [], []
+        self.log_sink, self.out_dir, self.stop_file_made = None, None, False
+        self.no_reheat_until = None
+        self.cmd_times = []                         # (t, command...) for the Amendment 5 checks
         f = str(fault or "")
         fresh = f.startswith("fresh")
         self.stroke = None if fresh else S4_MM                  # learned Open stroke (mm)
@@ -49,13 +84,27 @@ class SimDevice:
         self.target, self.state = None, "IDLE"
         self.stall_release = False
         self.speed, self.cal_speed, self.calibrated = "Medium", "Medium", True
-        self.current, self.cal_status = 450.0, "OK: irun=14 SGTHRS=31"
+        self.irun, self.cal_status = 14, "OK: irun=14 SGTHRS=31"
         self.vals = {"SGTHRS (stall threshold)": 31, "TCOOLTHRS": 210, "Vibration Threshold": 0.21}
         self.cal_until = None
         self.lockout = self.warned = False
         self.pending, self.pending_t = 0, 0.0
         self.heat_on, self.ihold, self.heat_start, self.ka, self.stop_code = False, 0, 0.0, 0.0, 0
         self.step_t, self.step_c, self.backstop = 0.0, 0.0, False
+
+    @property
+    def current(self):
+        return float(ma_of(self.irun))
+
+    def dark(self):
+        return self.fault == "data-stop-at-700" and self.t >= 700
+
+    def quiet(self):
+        """No states and no log lines reach the API (data-stop-at-700 and states-stop-at-700)."""
+        return self.dark() or (self.fault == "states-stop-at-700" and self.t >= 700)
+
+    def no_reheat(self):
+        return self.no_reheat_until is not None and self.t < self.no_reheat_until
 
     # ---- interface used by tp1_run.Run
     def now(self):
@@ -68,6 +117,8 @@ class SimDevice:
         if self.heat_on:
             self.heater_stop(5)
         print(f"(sim) commands received: {len(self.commands)}", flush=True)
+        if self.out_dir:
+            pathlib.Path(self.out_dir, "sim-commands.json").write_text(json.dumps(self.cmd_times), encoding="utf-8")
 
     async def sleep(self, s):
         end = self.t + s
@@ -106,7 +157,7 @@ class SimDevice:
                        5: ": script disconnected", 6: ": keepalive lost", 7: ": switched off"}[self.stop_code])
         return {"Motor Temperature": self.reading, "State": self.state, "Thermal Lockout": self.lockout,
                 "Glasscalibur": round(self.pos, 4), "Speed": self.speed, "Speed Lock": lock_text,
-                "Motor Current": self.current, "Calibration Status": self.cal_status,
+                "Motor Current": self.current, "IRUN value": float(self.irun), "Calibration Status": self.cal_status,
                 "StallGuard calibrated": self.calibrated, "Firmware Version": "dev-tp1",
                 "StallGuard Enabled": True, "Vibration Stall Detection": True, "Child Lock": self.buttons_locked,
                 "BENCH heater": self.heat_on, "BENCH heater status": hs,
@@ -115,15 +166,22 @@ class SimDevice:
                 "Close Limit Switch": self.actual <= 0.0, **self.vals}.get(name)
 
     async def cover(self, path, cmd, pos=None):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("cover", cmd))
+        self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
+        if cmd != "stop":
+            await self.sleep(CMD_DELAY_S)              # note 4: a bench-like round trip
         what = {"open": "Open", "close": "Close", "set": "Set position"}.get(cmd)
         if cmd == "stop":
+            if self.fault == "no-reheat" and self.no_reheat_until is None and self.fw >= 56.0:
+                self.no_reheat_until = float("inf")
             self.log("[D][main]: COVER stop_action")
             self.halt()
             self.cancel_pending()
             return 200
         accepted_by_fault = self.fault == "rest-close-accepted" and path == "rest" and cmd == "close"
-        if self.blocked() and not accepted_by_fault:
+        if (self.blocked() or self.no_reheat()) and not accepted_by_fault:
             if not (self.fault == "refused-close-no-cancel" and cmd == "close"):
                 self.cancel_pending()
             self.refused(what)
@@ -134,7 +192,11 @@ class SimDevice:
         return 200
 
     async def press(self, name):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("press", name))
+        self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
+        await self.sleep(CMD_DELAY_S)
         if name == "BENCH heater keepalive":
             self.ka = self.t
         elif name in ("BENCH: fire scheduled open", "BENCH: fire scheduled close"):
@@ -156,52 +218,67 @@ class SimDevice:
             elif self.lockout:
                 self.log("[W][main]: CAL: refused - thermal lockout (clears below 48 degC)")
                 self.event("Thermal Alert", "refused")
-            elif self.reading is None or self.reading > 50.0:
-                self.log(f"[W][main]: CAL: refused - motor temp {self.reading:.1f} degC (limit 50, NAN = sensor absent)")
+            elif self.fw is None or self.fw > 50.0:
+                self.log(f"[W][main]: CAL: refused - motor temp {self.fw:.1f} degC (limit 50, NAN = sensor absent)")
                 self.event("Thermal Alert", "refused")
             else:
                 self.log("[I][main]: CAL: starting - keep the window path clear")
                 self.cal_status, self.cal_until = "Calibrating...", self.t + 600
 
     async def switch(self, name, on):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("switch", name, bool(on)))
+        self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
         if name == "Child Lock":
             self.buttons_locked = bool(on)
             return
         if name == "BENCH heater":
-            if on and not self.heat_on and not self.lockout and self.reading < 62:
+            if on and not self.heat_on and not self.lockout and self.fw < 62:
                 self.heat_on, self.ihold, self.stop_code = True, 19, 0
                 self.heat_start = self.step_t = self.ka = self.t
-                self.step_c = self.reading
-                self.log(f"[W][bench]: heater ON - IHOLD 19 at {self.reading:.2f} degC")
+                self.step_c = self.fw
+                self.log(f"[W][bench]: heater ON - IHOLD 19 at {self.fw:.2f} degC")
             elif not on:
                 self.heater_stop(7)
 
     async def select(self, name, option):
         self.commands.append(("select", name))
+        self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
         if name == "Speed":
             self.speed = option
 
     async def number(self, name, value):
+        if self.dark():
+            raise ConnectionError("simulated: the unit is not answering")
         self.commands.append(("number", name))
+        self.cmd_times.append((round(self.t, 2),) + self.commands[-1])
         if name == "Motor Current":
-            self.current = float(value)
+            self.irun = irun_of(float(value))
+        elif name == "IRUN value":
+            self.irun = max(0, min(31, int(value)))
 
     # ---- firmware behaviour (documented)
     def log(self, line):
+        if self.quiet():
+            return
         self.logs.append((self.t, line))
+        if self.log_sink:
+            self.log_sink(self.t, line)
 
     def event(self, entity, etype):
         self.events.append((self.t, entity, etype, self.reading))
 
     def blocked(self):
-        return self.lockout or self.reading is None or self.reading >= 55.0
+        if self.fault == "gate-open":
+            return self.lockout or self.fw is None
+        return self.lockout or self.fw is None or self.fw >= 55.0
 
     def refused(self, what):
         if self.lockout:
             self.log(f"[W][thermal]: {what} refused - thermal lockout (clears below 48 degC)")
         else:
-            self.log(f"[W][thermal]: {what} refused - motor {self.reading:.1f} degC (no new moves at or above 55)")
+            self.log(f"[W][thermal]: {what} refused - motor {self.fw:.1f} degC (no new moves at or above 55)")
         self.event("Thermal Alert", "refused")
 
     def cancel_pending(self):
@@ -235,7 +312,7 @@ class SimDevice:
         if self.lockout:
             return
         self.lockout = True
-        self.log(f"[W][thermal]: THERMAL LOCKOUT - motor {self.reading:.1f} degC (limit 60); clears below 48 degC")
+        self.log(f"[W][thermal]: THERMAL LOCKOUT - motor {self.fw:.1f} degC (limit 60); clears below 48 degC")
         self.event("Thermal Alert", "sensor_lost" if cause == 2 else "lockout")
         if self.state in ("OPENING", "CLOSING") and not self.stall_release:
             self.halt()
@@ -245,7 +322,7 @@ class SimDevice:
     def heater_stop(self, code):
         if self.heat_on:
             self.heat_on, self.stop_code = False, code
-            self.log(f"[W][bench]: heater OFF (code {code}) at {self.reading:.2f} degC")
+            self.log(f"[W][bench]: heater OFF (code {code}) at {self.fw:.2f} degC")
 
     def on_reading(self, x):
         if x >= 60.0:
@@ -257,7 +334,7 @@ class SimDevice:
                 self.lockout = False
                 self.log(f"[W][thermal]: Thermal lockout cleared - motor {x:.1f} degC")
                 self.event("Thermal Alert", "cleared")
-        elif x >= 50.0 and not self.warned and not self.lockout:
+        elif x >= (49.8 if self.fault == "warn-below-50" else 50.0) and not self.warned and not self.lockout:
             self.warned = True
             self.log(f"[W][thermal]: Motor {x:.1f} degC - at or above the warning level (50)")
             self.event("Thermal Alert", "warning")
@@ -292,37 +369,51 @@ class SimDevice:
             elif (step > 0 and self.believed >= self.target) or (step < 0 and self.believed <= self.target):
                 self.believed = self.target
                 self.halt()
+        heater_k = 0.0 if self.no_reheat() else K_HEAT
         heat = (self.k_move * (self.current / 600.0) ** 2 if moving else 0.0) + \
-               (K_HEAT * (self.ihold / 19.0) ** 2 if self.heat_on and not moving else 0.0)
+               (heater_k * (self.ihold / 19.0) ** 2 if self.heat_on and not moving else 0.0)
         self.core += (heat - (self.core - AMBIENT) / TAU_S) * dt
         self.sens += (self.core - self.sens) * dt / LAG_S
+        b_max, b_down = (3.0, 4.0) if self.fault in ("cool-fast", "state-lag", "no-reheat") else (BOOST_MAX, BOOST_DOWN_S)
+        self.boost += ((b_max - self.boost) / BOOST_UP_S if moving else -self.boost / b_down) * dt
         if self.t >= self.next_read:                                  # product sensor, 3 s
             self.next_read += 3.0
-            self.reading = round(self.sens, 2)
+            self.fw = round(self.sens + self.boost, 2)
+            self.log(f"[D][sensor:094]: 'Motor Temperature': Sending state {self.fw:.5f} °C with 2 decimals of accuracy")
+            self.on_reading(self.fw)
+            self.api_queue.append((self.t + (6.0 if self.fault == "state-lag" else 0.05), self.fw))
+        while self.api_queue and self.t >= self.api_queue[0][0] and not self.quiet():  # the state reaches the API
+            self.reading = self.api_queue.pop(0)[1]
             self.seen["Motor Temperature"] = self.t
-            self.on_reading(self.reading)
+            self.temp_hist.append((self.t, self.reading))
+        if self.out_dir and self.fault == "exit-at-600" and self.t >= 600:
+            pathlib.Path(self.out_dir, "sim-exit-count.txt").write_text(str(len(self.logs)), encoding="utf-8")
+            os._exit(3)
+        if self.out_dir and self.fault == "operator-stop-at-700" and self.t >= 700 and not self.stop_file_made:
+            self.stop_file_made = True
+            pathlib.Path(self.out_dir, "STOP").write_text("operator\n", encoding="utf-8")
         if self.cal_until and self.t >= self.cal_until:               # calibration result
             self.cal_until, self.calibrated, self.cal_speed = None, True, self.speed
-            self.current = 420.0 if self.speed == "Slow" else 450.0
+            self.irun = 13 if self.speed == "Slow" else 14
             self.vals = {"SGTHRS (stall threshold)": 27 if self.speed == "Slow" else 31,
                          "TCOOLTHRS": 480 if self.speed == "Slow" else 210, "Vibration Threshold": 0.19}
-            self.cal_status = f"OK: irun=14 SGTHRS={self.vals['SGTHRS (stall threshold)']}"
+            self.cal_status = f"OK: irun={self.irun} SGTHRS={self.vals['SGTHRS (stall threshold)']}"
             self.log("[I][main]: CAL: done")
         if self.pending and self.t - self.pending_t >= 1800:
             self.log("[W][thermal]: Pending scheduled move dropped - the motor did not read below 50 degC within 30 min")
             self.pending = 0
         if self.t >= self.next_bench:                                 # test package, 1.5 s
             self.next_bench += 1.5
-            if moving and self.reading >= 62.0:
+            if moving and self.fw >= 62.0:
                 self.backstop = True
-                self.log(f"[E][bench]: BACKSTOP: {self.reading:.2f} degC with the motor moving - driver stopped")
+                self.log(f"[E][bench]: BACKSTOP: {self.fw:.2f} degC with the motor moving - driver stopped")
                 self.halt()
             if self.heat_on:
-                code = (1 if self.lockout else 2 if self.reading >= 62.0 else
+                code = (1 if self.lockout else 2 if self.fw >= 62.0 else
                         4 if self.t - self.heat_start >= 2700 else 6 if self.t - self.ka >= 30 else 0)
                 if code:
                     self.heater_stop(code)
                 elif self.t - self.step_t >= 180:
-                    if self.reading < 60.0 and self.reading - self.step_c < 1.0 and self.ihold < 31:
+                    if self.fw < 60.0 and self.fw - self.step_c < 1.0 and self.ihold < 31:
                         self.ihold = min(31, self.ihold + 4)
-                    self.step_t, self.step_c = self.t, self.reading
+                    self.step_t, self.step_c = self.t, self.fw
