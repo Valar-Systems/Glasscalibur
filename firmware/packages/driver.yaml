@@ -58,7 +58,7 @@ esphome:
             if (d->read_field(MSTEP_REG_SELECT_FIELD) != 1) differ += "mstep_reg_select ";
             if (d->read_field(INDEX_STEP_FIELD) != 1) differ += "index_step ";
             if (d->read_field(INTERNAL_RSENSE_FIELD) != 0) differ += "internal_rsense ";
-            if (d->read_field(MRES_FIELD) != 4) differ += "MRES ";
+            if (d->get_microsteps() != 8) differ += "microsteps ";
             if (d->read_field(VSENSE_FIELD) != 0) differ += "vsense ";
             if ((d->read_register(GSTAT) & 0x07) != 0) differ += "GSTAT ";
             if (differ.empty()) {
