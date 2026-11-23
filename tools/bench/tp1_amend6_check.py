@@ -188,9 +188,15 @@ if __name__ == "__main__":
     dn2 = run("states-stop-at-700", "no-freshness")
     ok, det = a62(dn2)
     late2 = [x for x in dn2["rows"] if x["t_s"] > 712.0]
-    J.report("A6-2b sabotage (freshness removed): the run goes on past 712 s", "FAIL", ok,
-             det + f"; rows after 712 s {len(late2)}; the run ended on {ended_by(dn2)}",
-             reason=not stop_rows(dn2) and bool(late2), fault=dn2["fault"])
+    # note 5: no "stopped: no reading for 10 s" row (any verdict), and the run either ends on the in-move backstop
+    # with result FAIL, or goes on past 712 s.
+    nostop2 = not [x for x in dn2["rows"] if x["step"].startswith("stopped: no reading for 10 s")]
+    backstop2 = [x for x in dn2["rows"] if x["step"].startswith("miss: script backstop: no reading for 10 s while moving")]
+    J.report("A6-2b sabotage (freshness removed): no 'no reading' stop; ends on the in-move backstop (FAIL) or goes past 712 s",
+             "FAIL", ok,
+             det + f"; rows after 712 s {len(late2)}; backstop rows {len(backstop2)}; result {dn2['result']}; "
+             f"the run ended on {ended_by(dn2)}",
+             reason=nostop2 and ((bool(backstop2) and dn2["result"] == "FAIL") or bool(late2)), fault=dn2["fault"])
     h = snippet(HEATER, None)
     J.report("A6-3 head: reading 3 s old, heater-on not sent", "PASS", h.get("heater_on_sent") is False, str(h),
              fault=h.get("fault"))
