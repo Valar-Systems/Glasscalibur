@@ -112,7 +112,7 @@ script:
           const uint32_t gstat = d->read_register(GSTAT) & 0x07;
           const bool regs = d->read_field(PDN_DISABLE_FIELD) == 1 && d->read_field(MSTEP_REG_SELECT_FIELD) == 1 &&
                             d->read_field(INDEX_STEP_FIELD) == 1 && d->read_field(I_SCALE_ANALOG_FIELD) == 0 &&
-                            d->read_field(INTERNAL_RSENSE_FIELD) == 0 && d->read_field(MRES_FIELD) == 4 &&
+                            d->read_field(INTERNAL_RSENSE_FIELD) == 0 && d->get_microsteps() == 8 &&
                             d->read_field(VSENSE_FIELD) == 0;
           const uint8_t wrote = (uint8_t) (((uint32_t) d->read_register(IFCNT) & 0xFF) - (uint32_t) id(driver_ifcnt_before));
           const bool landed = wrote >= 11 + 3 + 1;
