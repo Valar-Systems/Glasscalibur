@@ -116,6 +116,9 @@ format is based on [Keep a Changelog](https://keepachangelog.com/).
   reset, an undervoltage or a fault, the unit stops and re-applies the driver settings.
   During a thermal lockout the driver output is off; it comes back on only after its
   settings are confirmed.
+- At boot the driver output comes on only after the driver's settings read back as
+  configured. If any differs, the unit logs an error and re-applies and confirms them
+  first.
 
 ### Fixed
 - The unit no longer reboots every 15 minutes when no Home Assistant (native

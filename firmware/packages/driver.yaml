@@ -34,14 +34,46 @@ globals:
 
 esphome:
   on_boot:
+    # Right after the driver component's setup (which switches the output on):
+    # output off and held until the settings are read back at 590.
+    - priority: 799
+      then:
+        - lambda: |-
+            id(driver_hold) = true;
+            id(driver)->enable(false);
     # After core's driver configuration (priority 600): clear the status flags
-    # the power-up left, so the 500 ms check only sees later ones.
+    # the power-up left, so the 500 ms check only sees later ones. Then read back
+    # what setup and core wrote; the output comes on only if every value is as
+    # configured. Otherwise the settings are re-applied and confirmed first.
     - priority: 590
       then:
         - lambda: |-
-            const uint32_t g = id(driver)->read_register(GSTAT);
+            auto *d = id(driver);
+            const uint32_t g = d->read_register(GSTAT);
             ESP_LOGI("driver", "GSTAT at boot 0x%02x - cleared", (unsigned) (g & 0x07));
-            id(driver)->write_register(GSTAT, 0x07);
+            d->write_register(GSTAT, 0x07);
+            std::string differ;
+            if (d->read_field(I_SCALE_ANALOG_FIELD) != 0) differ += "I_scale_analog ";
+            if (d->read_field(PDN_DISABLE_FIELD) != 1) differ += "pdn_disable ";
+            if (d->read_field(MSTEP_REG_SELECT_FIELD) != 1) differ += "mstep_reg_select ";
+            if (d->read_field(INDEX_STEP_FIELD) != 1) differ += "index_step ";
+            if (d->read_field(INTERNAL_RSENSE_FIELD) != 0) differ += "internal_rsense ";
+            if (d->get_microsteps() != 8) differ += "microsteps ";
+            if (d->read_field(VSENSE_FIELD) != 0) differ += "vsense ";
+            if ((d->read_register(GSTAT) & 0x07) != 0) differ += "GSTAT ";
+            if (differ.empty()) {
+              if (!id(thermal_lockout)) {
+                id(driver_hold) = false;
+                d->enable(true);
+                ESP_LOGI("driver", "Driver settings confirmed at boot - driver output on");
+              } else {
+                ESP_LOGI("driver", "Driver settings confirmed at boot - output stays off until the lockout clears");
+              }
+            } else {
+              ESP_LOGE("driver", "Driver settings at boot differ (%s) - output stays off; re-applying", differ.c_str());
+              id(driver_reconfigure)->execute();
+              id(driver_confirm)->execute();
+            }
 
 script:
   # The driver reported a reset, a charge-pump undervoltage or a driver error.
