@@ -745,3 +745,15 @@ The three misses of the note 3 results stay on the record, as check and registra
   - (b) A6-2b's sabotage is re-registered as "no 'no reading for 10 s' row; the run ends on the in-move backstop (FAIL)
     or goes on past 712 s".
   - Then rerun once and merge if everything comes out as registered.
+
+### Amendment 6 note 5 (registered 2026-11-23, before the change and before the rerun)
+- **A6-2b sabotage, re-registered** (option (b) of the note 4 results). Freshness removed: there is no "stopped: no
+  reading for 10 s" row, and either
+  - (i) the run ends on the in-move backstop: a row whose step starts "miss: script backstop: no reading for 10 s
+    while moving", with the run's result FAIL; or
+  - (ii) rows go on past 712.0 s.
+- The reason predicate is checked against this wording before the run. The row that ended the run is recorded
+  alongside, as before.
+- Nothing else changes. The whole set reruns once: matcher M1 and its sabotage, A6 with A6-2b and O3, A5 and B4, the
+  heartbeat checks, the guard and prompts, the window guard, and the open guard.
+- If everything comes out as registered: push and open the PR; #34 closes as included.
