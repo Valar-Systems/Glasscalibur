@@ -757,3 +757,17 @@ The three misses of the note 3 results stay on the record, as check and registra
 - Nothing else changes. The whole set reruns once: matcher M1 and its sabotage, A6 with A6-2b and O3, A5 and B4, the
   heartbeat checks, the guard and prompts, the window guard, and the open guard.
 - If everything comes out as registered: push and open the PR; #34 closes as included.
+
+### Amendment 6 note 5 results (head 5e1c8f9): everything as registered
+- **First attempt (2026-11-23 21:05:46Z-21:06:58Z), an instrument fault:** B1 in the guard-and-prompts set runs
+  wg_test.py from its own output folder, and the runner had not put it there ("can't open file"), so B1 had no
+  reading. Everything else in that attempt came out as registered, A6 18/18 included. The runner now copies
+  wg_test.py first, and the whole set reran once.
+- **Rerun (23:26:07Z-23:27:21Z):**
+  - matcher M1 selftest and sabotage as predicted;
+  - A6 with A6-2b and O3: 18 of 18. The A6-2b sabotage: no "stopped: no reading for 10 s" row; the run ended on
+    "miss: script backstop: no reading for 10 s while moving", result FAIL, as note 5 registered;
+  - A5 and B4 26/26; HB1-HB5 9/9;
+  - guard and prompts ALL PASS (B1 included); window guard ALL PASS;
+  - open guard O1, O2 and O2's rerun variant as predicted.
+- Next: push and open the PR; #34 closes as included.
